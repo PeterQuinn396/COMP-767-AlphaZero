@@ -1,3 +1,5 @@
+import numpy as np
+
 class tictactoe():
 
     def __init__(self):
@@ -125,3 +127,4 @@ def test_tictactoe():
         print(f"obs: {obs}, reward: {reward}, done: {done}")
         if done:
             break
+
