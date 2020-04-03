@@ -9,6 +9,8 @@ Original file is located at
 
 import torch
 import numpy as np
+
+# np.seterr(all='raise')
 import matplotlib.pyplot as plt
 import time
 from torch.nn import Linear, ReLU, Softmax, Sigmoid
@@ -16,7 +18,7 @@ from torch.nn.functional import relu, softmax
 from torch import sigmoid
 import copy
 from tictactoe import tictactoe
-
+import matplotlib.pyplot as plt
 # set up NN
 
 # game state should have player turn as last value
@@ -39,7 +41,7 @@ class AlphaZero(torch.nn.Module):
     def forward(self, x):
         h1 = relu(self.fc1(x))
         h2 = relu(self.fc2(h1))
-        p = softmax(self.fc3(h2))  # probs for each action
+        p = softmax(self.fc3(h2), dim=-1)  # probs for each action
         _v = self.value_layer(h2)  # predict a value for this state
         v = 2 * sigmoid(_v) - 1  # maps between [-1,1]
 
@@ -49,15 +51,9 @@ class AlphaZero(torch.nn.Module):
             return torch.cat((p, v), dim=0)
 
 
-# set up Monte Carlo Tree Searching (MCTS)
-states_tensor = None  # [num_of_states_sampled, dim_of_state]
-estimated_probs_tensor = None  # [num_of_states_sampled, probs_of_taking_each_action]
-outcomes_tensor = None  # [num_states_sampled, final_outcome_of_game]
-
-
 class Node():
     def __init__(self, state, model, parent_node):
-        self.c = .1  # hyperparameter
+        self.c = .75 # hyperparameter
         self.state = np.copy(state)
         self.z = None
         self.parent = parent_node
@@ -120,14 +116,16 @@ def search(current_node, node_list, agent, game):  # get the next action for the
 
         for node in node_list:
             if np.array_equal(node.state, next_state):
-                # we have the next state in the tree already
+                # we have the next state in the tree already, we search it
                 next_node = node
-                break
-        else:  # this is a new state not currently in the tree
+                search(next_node, node_list, agent, game)
+                return
+        else:  # this is a new state not currently in the tree, we create the new node and backpropagate its value up the tree
             new_node = make_new_node_in_tree(next_state, node_list, agent, current_node)
-            next_node = new_node
+            next_node = new_node # we only search the next node if it was already in the tree
+            return
 
-        search(next_node, node_list, agent, game)
+
 
 
 def make_new_node_in_tree(obs, node_list, agent, last_node):
@@ -136,12 +134,13 @@ def make_new_node_in_tree(obs, node_list, agent, last_node):
     node = new_node
     v = new_node.value
     while not (node.parent is None):
+        # move up the tree and fill in the value estimates
+        node = node.parent
         # update Q with moving average based on the bootstrapped value function for the new node
         new_q = node.Q[node.last_action] * (node.actions_taken[node.last_action] - 1) + v * node.player
         new_q /= node.actions_taken[node.last_action]
         node.Q[node.last_action] = new_q
-        # move up the tree
-        node = node.parent
+
 
     node_list.append(new_node)
     return new_node
@@ -220,7 +219,7 @@ def generate_training_data(game, num_games, search_steps, agent):
 
 
 # set up policy improvement of NN using the simulated games
-def improve_model(model, training_data, steps, lr=.001):
+def improve_model(model, training_data, steps, lr=.001, verbose=False):
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
     for i in range(steps):
         s = training_data[0]
@@ -228,14 +227,21 @@ def improve_model(model, training_data, steps, lr=.001):
         z = training_data[2]
 
         y = model(s)
-        p = y[:, :-1]
+        p = y[:, :-1] + 1e-6
         v = y[:, -1]
 
+
         loss = (v - z) * (v - z) - torch.sum(pi * torch.log(p), dim=-1)
-        loss = torch.sum(loss)
+        mean_loss = torch.mean(loss)
+
+        if torch.isnan(mean_loss):
+            print("getting nans")
+
+        if verbose:
+            print(f"Step {i}, Loss: {mean_loss}")
 
         optimizer.zero_grad()
-        loss.backward()
+        mean_loss.backward()
         optimizer.step()
 
 
@@ -272,6 +278,7 @@ def compare_agents(old_agent, new_agent, game, num_games):  # num_games should b
 
     new_wins = 0
     old_wins = 0
+    ties=0
     total_games = 0
     for i in range(num_games // 2):
         r = play_game(old_agent, new_agent, game)
@@ -279,6 +286,10 @@ def compare_agents(old_agent, new_agent, game, num_games):  # num_games should b
             old_wins += 1
         elif r == -1:
             new_wins += 1
+        elif r ==0:
+            ties+=1
+        else:
+            raise RuntimeError("Got bad return from game")
 
     for i in range(num_games // 2):
         r = play_game(new_agent, old_agent, game)
@@ -286,10 +297,11 @@ def compare_agents(old_agent, new_agent, game, num_games):  # num_games should b
             new_wins += 1
         elif r == -1:
             old_wins += 1
-
-    return new_wins, old_wins
-
-
+        elif r ==0:
+            ties+=1
+        else:
+            raise RuntimeError("Got bad return from game")
+    return new_wins, old_wins, ties
 
 
 # training loop
@@ -300,11 +312,11 @@ def main():
     hidden_layer_size = 128
     agent = AlphaZero(input_size, hidden_layer_size, output_size)
 
-    iterations = 100  # how many times we want to make training data, update a model
+    iterations = 500  # how many times we want to make training data, update a model
     num_games = 50  # play certain number of games to generate examples each iteration
-    search_steps = 1  # for each step of each game, consider 4 possible outcomes
-    optimization_steps = 100  # once we have generated training data, how many epochs do we do on this data
-    num_faceoff_games = 20  # when comparing updated model and old model, how many games they play to determine winner
+    search_steps = 6  # for each step of each game, consider 4 possible outcomes
+    optimization_steps = 1000  # once we have generated training data, how many epochs do we do on this data
+    num_faceoff_games = 40  # when comparing updated model and old model, how many games they play to determine winner
 
     training_data = None
     new_agent = None
@@ -315,25 +327,44 @@ def main():
         if training_data is None:
             training_data = generate_training_data(game, num_games, search_steps, agent)
         else:  # we generate more data if our improved agent fails to beat the old one
+            print("Generating addional data...")
             more_data = generate_training_data(game, num_games, search_steps, agent)
-            training_data = torch.cat((training_data, more_data))
+            s = torch.cat((training_data[0], more_data[0]))
+            pi = torch.cat((training_data[1], more_data[1]))
+            z = torch.cat((training_data[2], more_data[2]))
+            training_data = [s,pi,z]
+
         print(f"Generated training data: {training_data[0].size(0)} states")
 
         if new_agent is None:  # keep the progress on the new model if we failed to beat the old one
             new_agent = copy.deepcopy(agent)
 
         print(f"Improving model...")
-        improve_model(new_agent, training_data, optimization_steps)
+        improve_model(new_agent, training_data, optimization_steps, lr=.001, verbose=True)
         print(f"Finished improving model.")
 
         print(f"Comparing agents...")
-        new_wins, old_wins = compare_agents(agent, new_agent, game, num_faceoff_games)
-        print(f"New wins: {new_wins}, old wins: {old_wins}")
+        new_wins, old_wins, ties = compare_agents(agent, new_agent, game, num_faceoff_games)
+        print(f"New wins: {new_wins}, old wins: {old_wins}, ties: {ties}")
         if new_wins > old_wins:
             agent = new_agent
             new_agent = None
             training_data = None
 
 
+    print("Saving agent")
+    torch.save(agent.state_dict(), "tictactoe_agent.pt")
+    return agent
+
+
+
 if __name__ == "__main__":
+    start = time.time()
     main()
+    end = time.time()
+
+    elapsed = end-start
+    h = elapsed // 3600
+    m = (elapsed-h*3600) // 60
+    s = elapsed % 60
+    print(f"Time: {h} h {m} m {s} s")
