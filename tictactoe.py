@@ -23,7 +23,7 @@ class tictactoe():
             print(f"action: {action}")
             self.render()
             print("")
-            exit(-1)
+            raise Exception("Illegal action")
 
         i = action // 3
         j = action % 3

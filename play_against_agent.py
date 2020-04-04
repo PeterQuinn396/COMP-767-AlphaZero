@@ -13,7 +13,7 @@ def load_and_play():
     game = tictactoe()
     input_size = game.obs_space_size
     output_size = game.action_space_size
-    hidden_layer_size = 128
+    hidden_layer_size = 256
     agent = AlphaZero(input_size, hidden_layer_size, output_size)
     agent.load_state_dict(torch.load("tictactoe_agent.pt"))
 

@@ -75,26 +75,11 @@ def search(current_node, node_dict, agent, game):  # get the next action for the
 
     # an UCB value for each action
     u = current_node.Q + current_node.c * current_node.initial_probs * np.sqrt(np.sum(current_node.actions_taken)) / (
-            1 + current_node.actions_taken)
-    u_ordered = np.flip(np.argsort(u))  # order the actions in term of their max expected return
+            1 + current_node.actions_taken) + 1e6 # a small inital prob for each action for numerical stability/simplcity
 
-    num_actions = u.shape[0]
-    i = 0
-    action = -1
-    while i < num_actions:  # determine the optimal legal action
-
-        action = u_ordered[i]
-        if game.isLegalAction(action):
-            # print(f"found legal action: {action}")
-            break
-        else:
-            i += 1
-
-    if i >= num_actions:
-        print("no legal actions found --- Big Problem!!! ----")
-        print(f"action expected values: {u}")
-        game.render()
-        exit(-1)
+    mask = game.getLegalActionMask()
+    u_masked = mask*u
+    action = np.argmax(u_masked)
 
     current_node.last_action = action
     current_node.actions_taken[action] += 1
@@ -109,7 +94,6 @@ def search(current_node, node_dict, agent, game):  # get the next action for the
 
     else:  # grow tree and search from the next node
         key = next_state.tobytes()
-
         if key in node_dict:
             next_node = node_dict[key]
             search(next_node, node_dict, agent, game)
@@ -149,7 +133,7 @@ def make_new_node_in_tree(obs, node_dict, agent, last_node):
 
 # simulate many games, build up tree of nodes
 def simulate_game(game, agent, search_steps):
-    # example_list = []  # a tuple of [state,action_probs,outcome], will be considered our target values when training
+
     s_list = []
     pi_list = []
     z_list = []
@@ -164,11 +148,11 @@ def simulate_game(game, agent, search_steps):
 
     while not done:
         current_state = obs
-        key = current_state.tobytes()
+        key = obs.tobytes()
         if key in node_dict:
             current_node = node_dict[key]
         else:
-            current_node = make_new_node_in_tree(current_node, node_dict, agent, current_node)
+            current_node = make_new_node_in_tree(current_state, node_dict, agent, current_node)
 
         for n in range(search_steps):  # run search_steps trajectories through game
             copy_game = game.copy()
@@ -185,8 +169,7 @@ def simulate_game(game, agent, search_steps):
         z_list.append(0)  # to be filled with game outcome later
 
         action = np.random.choice(list(range(game.action_space_size)), p=pi)
-
-        # reward should be +1 if 1st player won, -1 if 2nd player won
+        # reward should be +1 if 1st player won, -1 if 2nd player won, 0 if tie
         obs, reward, done = game.step(action)
 
         if done:
@@ -247,7 +230,7 @@ def improve_model(model, training_data, steps, lr=.001, verbose=False):
 
 
 # set up playing games between old agent and updated agent, keeping the winner
-def play_game(p1, p2, game):
+def play_game(p1, p2, game, greedy=False):
     obs, reward, done = game.reset()
     model_playing = p1
     while not done:
@@ -262,7 +245,12 @@ def play_game(p1, p2, game):
 
         p = p / np.sum(p)  # normalize probs
 
-        action = np.random.choice(list(range(game.action_space_size)), p=p)
+
+        if greedy: # this option is bad since the same game gets played everytime
+            action = np.argmax(p)
+        else:
+            action = np.random.choice(list(range(game.action_space_size)), p=p)
+
         obs, reward, done = game.step(action)
 
         if done:
@@ -275,14 +263,14 @@ def play_game(p1, p2, game):
             model_playing = p2
 
 
-def compare_agents(old_agent, new_agent, game, num_games):  # num_games should be even
+def compare_agents(old_agent, new_agent, game, num_games, greedy=False):  # num_games should be even
 
     new_wins = 0
     old_wins = 0
     ties = 0
 
     for i in range(num_games // 2):
-        r = play_game(old_agent, new_agent, game)
+        r = play_game(old_agent, new_agent, game, greedy=greedy)
         if r == 1:
             old_wins += 1
         elif r == -1:
@@ -293,7 +281,7 @@ def compare_agents(old_agent, new_agent, game, num_games):  # num_games should b
             raise RuntimeError("Got bad return from game")
 
     for i in range(num_games // 2):
-        r = play_game(new_agent, old_agent, game)
+        r = play_game(new_agent, old_agent, game, greedy=greedy)
         if r == 1:
             new_wins += 1
         elif r == -1:
@@ -310,15 +298,16 @@ def main():
     game = tictactoe()
     input_size = game.obs_space_size
     output_size = game.action_space_size
-    hidden_layer_size = 128
+    hidden_layer_size = 256
     agent = AlphaZero(input_size, hidden_layer_size, output_size)
 
     iterations = 500  # how many times we want to make training data, update a model
-    num_games = 50  # play certain number of games to generate examples each iteration
-    search_steps = 10  # for each step of each game, consider this many possible outcomes
+    num_games = 75  # play certain number of games to generate examples each iteration
+    search_steps = 50  # for each step of each game, consider this many possible outcomes
     optimization_steps = 500  # once we have generated training data, how many epochs do we do on this data
     num_faceoff_games = 40  # when comparing updated model and old model, how many games they play to determine winner
 
+    best_loss = .3
     training_data = None
     new_agent = None
     for itr in range(iterations):
@@ -344,8 +333,9 @@ def main():
         loss = improve_model(new_agent, training_data, optimization_steps, lr=.001, verbose=False)
         print(f"Finished improving model, loss: {loss}")
 
-        if loss < .3: # model is pretty good. lets stop and check it out
-            break
+        if loss < best_loss:  # model is pretty good. lets stop and check it out
+            torch.save(agent.state_dict(), f"tictactoe_agent_{loss}.pt")
+            best_loss = loss
 
         print(f"Comparing agents...")
         new_wins, old_wins, ties = compare_agents(agent, new_agent, game, num_faceoff_games)
