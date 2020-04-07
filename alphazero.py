@@ -75,11 +75,12 @@ def search(current_node, node_dict, agent, game):  # get the next action for the
 
     # an UCB value for each action
     u = current_node.Q + current_node.c * current_node.initial_probs * np.sqrt(np.sum(current_node.actions_taken)) / (
-            1 + current_node.actions_taken) + 1e6 # a small inital prob for each action for numerical stability/simplcity
+            1 + current_node.actions_taken) + 1e-6  # a small inital prob for each action for numerical stability/simplcity
 
     mask = game.getLegalActionMask()
-    u_masked = mask*u
-    action = np.argmax(u_masked)
+    u_masked = mask * u
+    u_masked[u_masked == 0] = np.nan  # make the zeros nans so they are ignored by the argmax
+    action = np.nanargmax(u_masked)
 
     current_node.last_action = action
     current_node.actions_taken[action] += 1
@@ -133,7 +134,6 @@ def make_new_node_in_tree(obs, node_dict, agent, last_node):
 
 # simulate many games, build up tree of nodes
 def simulate_game(game, agent, search_steps):
-
     s_list = []
     pi_list = []
     z_list = []
@@ -202,7 +202,7 @@ def generate_training_data(game, num_games, search_steps, agent):
 
 # set up policy improvement of NN using the simulated games
 def improve_model(model, training_data, steps, lr=.001, verbose=False):
-    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+    optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay = .001)
     mean_loss = None
     for i in range(steps):
         s = training_data[0]
@@ -214,6 +214,8 @@ def improve_model(model, training_data, steps, lr=.001, verbose=False):
         v = y[:, -1]
 
         loss = (v - z) * (v - z) - torch.sum(pi * torch.log(p), dim=-1)
+        # TODO: add a regularization term?
+
         mean_loss = torch.mean(loss)
 
         if torch.isnan(mean_loss):
@@ -245,8 +247,7 @@ def play_game(p1, p2, game, greedy=False):
 
         p = p / np.sum(p)  # normalize probs
 
-
-        if greedy: # this option is bad since the same game gets played everytime
+        if greedy:  # this option is bad since the same game gets played everytime
             action = np.argmax(p)
         else:
             action = np.random.choice(list(range(game.action_space_size)), p=p)
@@ -302,12 +303,12 @@ def main():
     agent = AlphaZero(input_size, hidden_layer_size, output_size)
 
     iterations = 500  # how many times we want to make training data, update a model
-    num_games = 75  # play certain number of games to generate examples each iteration
-    search_steps = 50  # for each step of each game, consider this many possible outcomes
+    num_games = 50  # play certain number of games to generate examples each iteration
+    search_steps = 75  # for each step of each game, consider this many possible outcomes
     optimization_steps = 500  # once we have generated training data, how many epochs do we do on this data
     num_faceoff_games = 40  # when comparing updated model and old model, how many games they play to determine winner
 
-    best_loss = .3
+    best_loss = .15
     training_data = None
     new_agent = None
     for itr in range(iterations):
@@ -348,6 +349,7 @@ def main():
         elif training_data[0].size(0) > 3000:  # prevent getting stuck with a bad model, reset to old model and new data
             new_agent = None
             training_data = None
+        training_data= None # always reset training data, helps?
 
     print("Saving agent")
     torch.save(agent.state_dict(), "tictactoe_agent.pt")
