@@ -11,11 +11,11 @@ import torch
 import numpy as np
 
 # np.seterr(all='raise')
-import matplotlib.pyplot as plt
+
 import time
-from torch.nn import Linear, ReLU, Softmax, Sigmoid
+from torch.nn import Linear
 from torch.nn.functional import relu, softmax
-from torch import sigmoid
+from torch import tanh
 import copy
 from tictactoe import tictactoe
 import matplotlib.pyplot as plt
@@ -23,8 +23,11 @@ import matplotlib.pyplot as plt
 # set up NN
 
 # game state should have player turn as last value
-device = "cuda:0" if torch.cuda.is_available else "cpu"
-device = "cpu"
+try:
+    device = torch.device("cuda:0") if torch.cuda.is_available() else torch.device("cpu")
+except Exception():
+    device = torch.device("cpu")  # force cpu
+
 print(f"Using {device}")
 
 
@@ -44,7 +47,7 @@ class AlphaZero(torch.nn.Module):
         h2 = relu(self.fc2(h1))
         p = softmax(self.fc3(h2), dim=-1)  # probs for each action
         _v = self.value_layer(h2)  # predict a value for this state
-        v = 2 * sigmoid(_v) - 1  # maps between [-1,1]
+        v = tanh(_v)
 
         if len(p.size()) == 2:  # we were doing a batch input of vectors x
             return torch.cat((p, v), dim=1)  # cat along dim 1
@@ -54,7 +57,7 @@ class AlphaZero(torch.nn.Module):
 
 class Node():
     def __init__(self, state, model, parent_node):
-        self.c = .5  # hyperparameter
+        self.c = 2  # hyperparameter
         self.state = np.copy(state)
         self.z = None
         self.parent = parent_node
@@ -153,7 +156,7 @@ def simulate_game(game, agent, search_steps):
             current_node = node_dict[key]
         else:
             current_node = make_new_node_in_tree(current_state, node_dict, agent, current_node)
-
+        current_node.parent = None  # we don't need to backpropagate the values through the tree past this node
         for n in range(search_steps):  # run search_steps trajectories through game
             copy_game = game.copy()
             search(current_node, node_dict, agent,
@@ -162,6 +165,7 @@ def simulate_game(game, agent, search_steps):
         # normalize the actions taken during the searching to get probabilities learned during MCTS
         legal_action_mask = game.getLegalActionMask()
         pi = current_node.actions_taken * legal_action_mask
+
         pi = pi / np.sum(pi)
 
         s_list.append(current_state)
@@ -202,7 +206,7 @@ def generate_training_data(game, num_games, search_steps, agent):
 
 # set up policy improvement of NN using the simulated games
 def improve_model(model, training_data, steps, lr=.001, verbose=False):
-    optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay = .001)
+    optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=0)
     mean_loss = None
     for i in range(steps):
         s = training_data[0]
@@ -216,7 +220,9 @@ def improve_model(model, training_data, steps, lr=.001, verbose=False):
         loss = (v - z) * (v - z) - torch.sum(pi * torch.log(p), dim=-1)
         # TODO: add a regularization term?
 
-        mean_loss = torch.mean(loss)
+        value_loss = torch.mean((v - z) * (v - z))
+        policy_loss = -torch.mean(torch.sum(pi * torch.log(p), dim=-1))
+        mean_loss = value_loss + policy_loss
 
         if torch.isnan(mean_loss):
             print("getting nans")
@@ -228,7 +234,7 @@ def improve_model(model, training_data, steps, lr=.001, verbose=False):
         mean_loss.backward()
         optimizer.step()
 
-    return mean_loss.detach().numpy()
+    return mean_loss.detach().numpy(), value_loss.detach().numpy(), policy_loss.detach().numpy()
 
 
 # set up playing games between old agent and updated agent, keeping the winner
@@ -302,10 +308,10 @@ def main():
     hidden_layer_size = 256
     agent = AlphaZero(input_size, hidden_layer_size, output_size)
 
-    iterations = 500  # how many times we want to make training data, update a model
-    num_games = 50  # play certain number of games to generate examples each iteration
-    search_steps = 75  # for each step of each game, consider this many possible outcomes
-    optimization_steps = 500  # once we have generated training data, how many epochs do we do on this data
+    iterations = 800  # how many times we want to make training data, update a model
+    num_games = 25  # play certain number of games to generate examples each iteration
+    search_steps = 25  # for each step of each game, consider this many possible outcomes
+    optimization_steps = 100  # once we have generated training data, how many epochs do we do on this data
     num_faceoff_games = 40  # when comparing updated model and old model, how many games they play to determine winner
 
     best_loss = .15
@@ -331,11 +337,11 @@ def main():
             new_agent = copy.deepcopy(agent)
 
         print(f"Improving model...")
-        loss = improve_model(new_agent, training_data, optimization_steps, lr=.001, verbose=False)
-        print(f"Finished improving model, loss: {loss}")
+        loss, value_loss, policy_loss = improve_model(new_agent, training_data, optimization_steps, lr=.001, verbose=False)
+        print(f"Finished improving model, total loss: {loss}, value loss: {value_loss}, policy loss: {policy_loss}")
 
         if loss < best_loss:  # model is pretty good. lets stop and check it out
-            torch.save(agent.state_dict(), f"tictactoe_agent_{loss}.pt")
+            torch.save(agent.state_dict(), f"saved_models/tictactoe_agent_{loss}.pt")
             best_loss = loss
 
         print(f"Comparing agents...")
@@ -349,10 +355,10 @@ def main():
         elif training_data[0].size(0) > 3000:  # prevent getting stuck with a bad model, reset to old model and new data
             new_agent = None
             training_data = None
-        training_data= None # always reset training data, helps?
+        training_data = None  # always reset training data, helps?
 
     print("Saving agent")
-    torch.save(agent.state_dict(), "tictactoe_agent.pt")
+    torch.save(agent.state_dict(), "saved_models/tictactoe_agent.pt")
     return agent
 
 
