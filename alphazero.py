@@ -57,6 +57,32 @@ class AlphaZero(torch.nn.Module):
             return torch.cat((p, v), dim=0)
 
 
+class AlphaZeroResidual(torch.nn.Module):
+
+    def __init__(self, input_dim, hidden_layer_dim, output_dim):  # should probably use conv layers and residual layers
+        super().__init__()
+        self.input_dim = input_dim
+        self.output_dim = output_dim
+        self.input_layer = Linear(input_dim, hidden_layer_dim)
+        self.fc_layers= torch.nn.ModuleList([Linear(hidden_layer_dim, hidden_layer_dim), Linear(hidden_layer_dim, hidden_layer_dim)])
+        self.policy_layer= Linear(hidden_layer_dim, output_dim)
+        self.value_layer = Linear(hidden_layer_dim, 1)
+
+    def forward(self, x):
+        h = relu(self.input_layer(x))
+        for l in self.fc_layers: # all the hidden layers
+            h = relu(l(h)+h) # residual block
+        p = softmax(self.policy_layer(h), dim=-1)  # probs for each action
+        _v = self.value_layer(h2)  # predict a value for this state
+        v = tanh(_v)
+
+        if len(p.size()) == 2:  # we were doing a batch input of vectors x
+            return torch.cat((p, v), dim=1)  # cat along dim 1
+        else:  # a single vector x was input, cat along dim 0
+            return torch.cat((p, v), dim=0)
+
+
+
 class Node():
     def __init__(self, state, model, parent_node):
         self.c = 2  # hyperparameter
