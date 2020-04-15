@@ -73,7 +73,7 @@ class AlphaZeroResidual(torch.nn.Module):
         for l in self.fc_layers: # all the hidden layers
             h = relu(l(h)+h) # residual block
         p = softmax(self.policy_layer(h), dim=-1)  # probs for each action
-        _v = self.value_layer(h2)  # predict a value for this state
+        _v = self.value_layer(h)  # predict a value for this state
         v = tanh(_v)
 
         if len(p.size()) == 2:  # we were doing a batch input of vectors x
