@@ -23,8 +23,8 @@ import matplotlib.pyplot as plt
 # set up NN
 
 # game state should have player turn as last value
-device = "cuda:0" if torch.cuda.is_available else "cpu"
-device = "cpu"
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+# device = "cpu"
 print(f"Using {device}")
 
 
@@ -34,16 +34,19 @@ class AlphaZero(torch.nn.Module):
         super().__init__()
         self.input_dim = input_dim
         self.output_dim = output_dim
-        self.fc1 = Linear(input_dim, hidden_layer_dim)
-        self.fc2 = Linear(hidden_layer_dim, hidden_layer_dim)
-        self.fc3 = Linear(hidden_layer_dim, output_dim)
+        self.input_layer = Linear(input_dim, hidden_layer_dim)
+        self.fc_layers= torch.nn.ModuleList([Linear(hidden_layer_dim, hidden_layer_dim), Linear(hidden_layer_dim, hidden_layer_dim)])
+        self.policy_layer= Linear(hidden_layer_dim, output_dim)
         self.value_layer = Linear(hidden_layer_dim, 1)
 
     def forward(self, x):
-        h1 = relu(self.fc1(x))
-        h2 = relu(self.fc2(h1))
-        p = softmax(self.fc3(h2), dim=-1)  # probs for each action
-        _v = self.value_layer(h2)  # predict a value for this state
+        h = relu(self.input_layer(x))
+        for l in self.fc_layers: # all the hidden layers
+            h = relu(l(h))
+
+        p = softmax(self.policy_layer(h), dim=-1)  # probs for each action
+
+        _v = self.value_layer(h)  # predict a value for this state
         v = 2 * sigmoid(_v) - 1  # maps between [-1,1]
 
         if len(p.size()) == 2:  # we were doing a batch input of vectors x
@@ -61,9 +64,10 @@ class Node():
         self.player = 1 if parent_node is None else -parent_node.player  # +1 if first player, -1 if 2nd player
 
         x = torch.tensor(self.state, device=device, dtype=torch.float32)
+
         predict = model(x)
-        self.initial_probs = predict[:-1].detach().numpy()  # don't need grad here, this is making training data
-        self.value = predict[-1].detach().detach().numpy()  # nor here
+        self.initial_probs = predict[:-1].detach().cpu().numpy()  # don't need grad here, this is making training data
+        self.value = predict[-1].detach().cpu().numpy()  # nor here
 
         action_size = predict.size()[0] - 1
         self.Q = np.zeros(action_size)
@@ -202,7 +206,7 @@ def generate_training_data(game, num_games, search_steps, agent):
 
 # set up policy improvement of NN using the simulated games
 def improve_model(model, training_data, steps, lr=.001, verbose=False):
-    optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay = .001)
+    optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay = .0001)
     mean_loss = None
     for i in range(steps):
         s = training_data[0]
@@ -214,7 +218,6 @@ def improve_model(model, training_data, steps, lr=.001, verbose=False):
         v = y[:, -1]
 
         loss = (v - z) * (v - z) - torch.sum(pi * torch.log(p), dim=-1)
-        # TODO: add a regularization term?
 
         mean_loss = torch.mean(loss)
 
@@ -228,7 +231,7 @@ def improve_model(model, training_data, steps, lr=.001, verbose=False):
         mean_loss.backward()
         optimizer.step()
 
-    return mean_loss.detach().numpy()
+    return mean_loss.detach().cpu().numpy()
 
 
 # set up playing games between old agent and updated agent, keeping the winner
@@ -241,7 +244,7 @@ def play_game(p1, p2, game, greedy=False):
         v = y[-1]
         p = y[:-1]
 
-        p = p.detach().numpy()
+        p = p.detach().cpu().numpy()
         mask = game.getLegalActionMask()
         p = p * mask
 
@@ -301,11 +304,11 @@ def main():
     output_size = game.action_space_size
     hidden_layer_size = 256
     agent = AlphaZero(input_size, hidden_layer_size, output_size)
-
+    agent.to(device)
     iterations = 500  # how many times we want to make training data, update a model
     num_games = 50  # play certain number of games to generate examples each iteration
     search_steps = 75  # for each step of each game, consider this many possible outcomes
-    optimization_steps = 500  # once we have generated training data, how many epochs do we do on this data
+    optimization_steps = 1000  # once we have generated training data, how many epochs do we do on this data
     num_faceoff_games = 40  # when comparing updated model and old model, how many games they play to determine winner
 
     best_loss = .15

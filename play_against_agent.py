@@ -3,11 +3,9 @@ from tictactoe import tictactoe
 import torch
 import numpy as np
 
-device = "cuda:0" if torch.cuda.is_available else "cpu"
-device = "cpu"
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+# device = "cpu"
 print(f"Using {device}")
-
-
 
 def load_and_play(filename, agent_plays=1):
     game = tictactoe()
