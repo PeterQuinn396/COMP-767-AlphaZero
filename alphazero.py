@@ -39,39 +39,15 @@ class AlphaZero(torch.nn.Module):
         self.input_dim = input_dim
         self.output_dim = output_dim
         self.input_layer = Linear(input_dim, hidden_layer_dim)
-        self.fc_layers= torch.nn.ModuleList([Linear(hidden_layer_dim, hidden_layer_dim), Linear(hidden_layer_dim, hidden_layer_dim)])
-        self.policy_layer= Linear(hidden_layer_dim, output_dim)
+        self.fc_layers = torch.nn.ModuleList(
+            [Linear(hidden_layer_dim, hidden_layer_dim), Linear(hidden_layer_dim, hidden_layer_dim)])
+        self.policy_layer = Linear(hidden_layer_dim, output_dim)
         self.value_layer = Linear(hidden_layer_dim, 1)
 
     def forward(self, x):
         h = relu(self.input_layer(x))
-        for l in self.fc_layers: # all the hidden layers
+        for l in self.fc_layers:  # all the hidden layers
             h = relu(l(h))
-        p = softmax(self.policy_layer(h), dim=-1)  # probs for each action
-        _v = self.value_layer(h2)  # predict a value for this state
-        v = tanh(_v)
-
-        if len(p.size()) == 2:  # we were doing a batch input of vectors x
-            return torch.cat((p, v), dim=1)  # cat along dim 1
-        else:  # a single vector x was input, cat along dim 0
-            return torch.cat((p, v), dim=0)
-
-
-class AlphaZeroResidual(torch.nn.Module):
-
-    def __init__(self, input_dim, hidden_layer_dim, output_dim):  # should probably use conv layers and residual layers
-        super().__init__()
-        self.input_dim = input_dim
-        self.output_dim = output_dim
-        self.input_layer = Linear(input_dim, hidden_layer_dim)
-        self.fc_layers= torch.nn.ModuleList([Linear(hidden_layer_dim, hidden_layer_dim), Linear(hidden_layer_dim, hidden_layer_dim)])
-        self.policy_layer= Linear(hidden_layer_dim, output_dim)
-        self.value_layer = Linear(hidden_layer_dim, 1)
-
-    def forward(self, x):
-        h = relu(self.input_layer(x))
-        for l in self.fc_layers: # all the hidden layers
-            h = relu(l(h)+h) # residual block
         p = softmax(self.policy_layer(h), dim=-1)  # probs for each action
         _v = self.value_layer(h)  # predict a value for this state
         v = tanh(_v)
@@ -82,10 +58,37 @@ class AlphaZeroResidual(torch.nn.Module):
             return torch.cat((p, v), dim=0)
 
 
+class AlphaZeroResidual(torch.nn.Module):
+
+    def __init__(self, input_dim, hidden_layer_dim, output_dim):
+        super().__init__()
+        self.input_dim = input_dim
+        self.output_dim = output_dim
+        self.input_layer = Linear(input_dim, hidden_layer_dim)
+        self.fc_layers = torch.nn.ModuleList(
+            [Linear(hidden_layer_dim, hidden_layer_dim), Linear(hidden_layer_dim, hidden_layer_dim),
+             Linear(hidden_layer_dim, hidden_layer_dim)])
+        # , Linear(hidden_layer_dim, hidden_layer_dim), Linear(hidden_layer_dim, hidden_layer_dim)])
+        self.policy_layer = Linear(hidden_layer_dim, output_dim)
+        self.value_layer = Linear(hidden_layer_dim, 1)
+
+    def forward(self, x):
+        h = relu(self.input_layer(x))
+        for l in self.fc_layers:  # all the hidden layers
+            h = relu(l(h) + h)  # residual block
+        p = softmax(self.policy_layer(h), dim=-1)  # probs for each action
+        _v = self.value_layer(h)  # predict a value for this state
+        v = tanh(_v)
+
+        if len(p.size()) == 2:  # we were doing a batch input of vectors x
+            return torch.cat((p, v), dim=1)  # cat along dim 1
+        else:  # a single vector x was input, cat along dim 0
+            return torch.cat((p, v), dim=0)
+
 
 class Node():
     def __init__(self, state, model, parent_node):
-        self.c = 2  # hyperparameter
+        self.c = 1  # hyperparameter
         self.state = np.copy(state)
         self.z = None
         self.parent = parent_node
@@ -185,7 +188,13 @@ def simulate_game(game, agent, search_steps):
             current_node = node_dict[key]
         else:
             current_node = make_new_node_in_tree(current_state, node_dict, agent, current_node)
-        current_node.parent = None  # we don't need to backpropagate the values through the tree past this node
+        current_node.parent = None  # we don't need to back propagate the values through the tree past this node
+        # add some noise to the root of the tree to encourage exploration and variety
+        # mix_ratio = .1
+        # diri_alpha = .2
+        # noise = np.random.dirichlet(diri_alpha * np.ones_like(current_node.initial_probs))
+        # current_node.initial_probs = (1 - mix_ratio) * current_node.initial_probs + mix_ratio * noise
+
         for n in range(search_steps):  # run search_steps trajectories through game
             copy_game = game.copy()
             search(current_node, node_dict, agent,
@@ -201,7 +210,16 @@ def simulate_game(game, agent, search_steps):
         pi_list.append(pi)
         z_list.append(0)  # to be filled with game outcome later
 
-        action = np.random.choice(list(range(game.action_space_size)), p=pi)
+        # select next action with some variation to make examples robust
+
+        if np.random.random() < .05:  # select a random legal action
+            probs = np.ones_like(pi)
+            probs = probs * legal_action_mask
+            probs = probs / np.sum(probs)
+            action = np.random.choice(list(range(game.action_space_size)), p=probs)
+        else:  # select action proportional to determined probs from MCTS
+            action = np.random.choice(list(range(game.action_space_size)), p=pi)
+
         # reward should be +1 if 1st player won, -1 if 2nd player won, 0 if tie
         obs, reward, done = game.step(action)
 
@@ -235,7 +253,6 @@ def generate_training_data(game, num_games, search_steps, agent):
 
 # set up policy improvement of NN using the simulated games
 def improve_model(model, training_data, steps, lr=.001, verbose=False):
-
     optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=0)
 
     mean_loss = None
@@ -248,7 +265,7 @@ def improve_model(model, training_data, steps, lr=.001, verbose=False):
         p = y[:, :-1] + 1e-6  # numerical stability so we don't get log(0)
         v = y[:, -1]
 
-        loss = (v - z) * (v - z) - torch.sum(pi * torch.log(p), dim=-1)
+        # loss = (v - z) * (v - z) - torch.sum(pi * torch.log(p), dim=-1)
 
         value_loss = torch.mean((v - z) * (v - z))
         policy_loss = -torch.mean(torch.sum(pi * torch.log(p), dim=-1))
@@ -264,9 +281,7 @@ def improve_model(model, training_data, steps, lr=.001, verbose=False):
         mean_loss.backward()
         optimizer.step()
 
-
-    return mean_loss.detach().numpy(), value_loss.detach().numpy(), policy_loss.detach().numpy()
-
+    return mean_loss.detach().cpu().numpy(), value_loss.detach().cpu().numpy(), policy_loss.detach().cpu().numpy()
 
 
 # set up playing games between old agent and updated agent, keeping the winner
@@ -279,7 +294,7 @@ def play_game(p1, p2, game, greedy=False):
         v = y[-1]
         p = y[:-1]
 
-        p = p.detach().cpu().numpy()
+        p = p.detach().cpu().numpy() + 1e-6  # numerical stability term
         mask = game.getLegalActionMask()
         p = p * mask
 
@@ -338,23 +353,29 @@ def main():
     input_size = game.obs_space_size
     output_size = game.action_space_size
     hidden_layer_size = 256
-    agent = AlphaZero(input_size, hidden_layer_size, output_size)
-
+    agent = AlphaZeroResidual(input_size, hidden_layer_size, output_size)
+    # agent = AlphaZero(input_size, hidden_layer_size, output_size)
     agent.to(device)
 
     iterations = 800  # how many times we want to make training data, update a model
-    num_games = 25  # play certain number of games to generate examples each iteration
-    search_steps = 25  # for each step of each game, consider this many possible outcomes
-    optimization_steps = 100  # once we have generated training data, how many epochs do we do on this data
+    num_games = 10  # play certain number of games to generate examples each iteration (batches)
+    search_steps = 60  # for each step of each game, consider this many possible outcomes
+    optimization_steps = 300  # once we have generated training data, how many epochs do we do on this data
 
-    num_faceoff_games = 40  # when comparing updated model and old model, how many games they play to determine winner
+    num_faceoff_games = 20  # when comparing updated model and old model, how many games they play to determine winner
 
-    best_loss = .15
+    lr = .001
+    lr_decay = .1
+    lr_decay_period = 100
+
+    best_loss = .1
     training_data = None
     new_agent = None
     for itr in range(iterations):
         print(f"Starting iteration {itr + 1} / {iterations}")
-
+        if itr != 0 and itr % lr_decay_period == 0:
+            lr *= lr_decay
+            print(f"Decayed lr to {lr}")
         print(f"Generating training data...")
         if training_data is None:
             training_data = generate_training_data(game, num_games, search_steps, agent)
@@ -372,7 +393,9 @@ def main():
             new_agent = copy.deepcopy(agent)
 
         print(f"Improving model...")
-        loss, value_loss, policy_loss = improve_model(new_agent, training_data, optimization_steps, lr=.001, verbose=False)
+        loss, value_loss, policy_loss = improve_model(new_agent, training_data, optimization_steps, lr=lr,
+                                                      verbose=False)
+
         print(f"Finished improving model, total loss: {loss}, value loss: {value_loss}, policy loss: {policy_loss}")
 
         if loss < best_loss:  # model is pretty good. lets stop and check it out

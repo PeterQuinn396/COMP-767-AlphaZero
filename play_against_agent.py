@@ -1,4 +1,4 @@
-from alphazero import AlphaZero
+from alphazero import AlphaZero, AlphaZeroResidual
 from tictactoe import tictactoe
 import torch
 import numpy as np
@@ -12,7 +12,8 @@ def load_and_play(filename, agent_plays=1):
     input_size = game.obs_space_size
     output_size = game.action_space_size
     hidden_layer_size = 256
-    agent = AlphaZero(input_size, hidden_layer_size, output_size)
+    # agent = AlphaZero(input_size, hidden_layer_size, output_size)
+    agent = AlphaZeroResidual(input_size, hidden_layer_size, output_size)
     agent.load_state_dict(torch.load(filename))
 
     play_with_agent(agent, verbose=True, agent_plays=agent_plays)
@@ -25,6 +26,7 @@ def get_agent_action(agent, game, state, verbose=False):
     v = y[-1].detach().numpy()
     _pi = pi.detach().numpy()
     _pi = _pi * mask
+    _pi = _pi/np.sum(_pi)
     action = np.argmax(_pi)
 
     if verbose:
@@ -79,5 +81,5 @@ def play_with_agent(agent, verbose=False, agent_plays=1):
 
 
 if __name__ == "__main__":
-   load_and_play("tictactoe_agent_0.14443549513816833.pt", agent_plays=2 ) # works really well
+   load_and_play("best_models/tictactoe_agent_0.01879117079079151.pt", agent_plays=1) # works really well
     # load_and_play("tictactoe_agent.pt")
