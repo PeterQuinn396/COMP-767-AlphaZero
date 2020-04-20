@@ -13,8 +13,8 @@ import numpy as np
 # np.seterr(all='raise')
 
 import time
-from torch.nn import Linear
-from torch.nn.functional import relu, softmax
+from torch.nn import Linear, BatchNorm1d
+from torch.nn.functional import relu, softmax, leaky_relu
 from torch import tanh
 import copy
 from tictactoe import tictactoe
@@ -30,6 +30,57 @@ except Exception():
     device = torch.device("cpu")  # force cpu
 
 print(f"Using {device}")
+
+
+class AlphaZeroConv(torch.nn.Module):
+    # Before passing through the NN, convert the +1, -1, 0 representation to a one hot encoding scheme.
+    # We will have 2 3x3 maps with +1 to indicate filled spaces for each player
+    def __init__(self, input_dim, hidden_layer_dim, output_dim):  # should probably use conv layers and residual layers
+        super().__init__()
+        self.input_dim = input_dim
+        self.output_dim = output_dim
+        self.input_layer = Linear(input_dim, hidden_layer_dim)
+
+        self.conv2d1 = torch.nn.Conv2d(3, 128, 2, stride=1)
+        self.conv2d2 = torch.nn.Conv2d(128, 128, 2, stride=1)
+        self.fc_layers = torch.nn.ModuleList(
+            [Linear(hidden_layer_dim, hidden_layer_dim), Linear(hidden_layer_dim, hidden_layer_dim)])
+
+        self.policy_layer = Linear(hidden_layer_dim, output_dim)
+        self.value_layer = Linear(hidden_layer_dim, 1)
+        self.fc1 = Linear(128, 128)
+
+    def forward(self, x):
+
+        if len(x.shape) == 1:
+            x = x.unsqueeze(0)
+
+        turn = x[:, -1]
+        board = x[:, :-1]
+        zeros = torch.zeros_like(board)
+        map1 = torch.where(board == 1, board, zeros)
+        map2 = torch.where(board == -1, -board, zeros)
+
+        map1 = map1.view(-1, 3, 3)
+        map2 = map2.view(-1, 3, 3)
+        turn = torch.ones_like(map1) * turn.unsqueeze(-1).unsqueeze(-1).expand_as(map1)
+        h = torch.stack((map1, map2, turn), dim=1)
+        # h = h.unsqueeze(0)
+        h = relu(self.conv2d1(h))
+        h = relu(self.conv2d2(h))
+        h = h.squeeze()
+        h = relu(self.fc1(h))
+        # h = relu(self.input_layer(x))
+        for l in self.fc_layers:  # all the hidden layers
+            h = relu(l(h) + h)
+        p = softmax(self.policy_layer(h), dim=-1)  # probs for each action
+        _v = self.value_layer(h)  # predict a value for this state
+        v = tanh(_v)
+
+        if len(p.size()) == 2:  # we were doing a batch input of vectors x
+            return torch.cat((p, v), dim=1)  # cat along dim 1
+        else:  # a single vector x was input, cat along dim 0
+            return torch.cat((p, v), dim=0)
 
 
 class AlphaZero(torch.nn.Module):
@@ -69,21 +120,26 @@ class AlphaZeroResidual(torch.nn.Module):
             [Linear(hidden_layer_dim, hidden_layer_dim), Linear(hidden_layer_dim, hidden_layer_dim),
              Linear(hidden_layer_dim, hidden_layer_dim)])
         # , Linear(hidden_layer_dim, hidden_layer_dim), Linear(hidden_layer_dim, hidden_layer_dim)])
+
+        self.batch_norms = torch.nn.ModuleList([BatchNorm1d(hidden_layer_dim) for x in self.fc_layers])
         self.policy_layer = Linear(hidden_layer_dim, output_dim)
         self.value_layer = Linear(hidden_layer_dim, 1)
 
     def forward(self, x):
+
+        if len(x.shape) == 1:
+            x = x.unsqueeze(0)
+
         h = relu(self.input_layer(x))
-        for l in self.fc_layers:  # all the hidden layers
-            h = relu(l(h) + h)  # residual block
+        for i, l in enumerate(self.fc_layers):  # all the hidden layers
+            h = l(h) + h  # residual block
+            # h = self.batch_norms[i](h)
+            h = relu(h)
         p = softmax(self.policy_layer(h), dim=-1)  # probs for each action
         _v = self.value_layer(h)  # predict a value for this state
         v = tanh(_v)
 
-        if len(p.size()) == 2:  # we were doing a batch input of vectors x
-            return torch.cat((p, v), dim=1)  # cat along dim 1
-        else:  # a single vector x was input, cat along dim 0
-            return torch.cat((p, v), dim=0)
+        return torch.cat((p, v), dim=1).squeeze()
 
 
 class Node():
@@ -203,22 +259,29 @@ def simulate_game(game, agent, search_steps):
         # normalize the actions taken during the searching to get probabilities learned during MCTS
         legal_action_mask = game.getLegalActionMask()
         pi = current_node.actions_taken * legal_action_mask
-
         pi = pi / np.sum(pi)
+
+        # save the true distribution or a greedy version of it
+        # if np.random.random() < .1:
+        #     _pi = pi
+        # else:
+        #     greedy_pi = np.zeros_like(pi)
+        #     greedy_pi[np.argmax(pi)] = 1
+        #     _pi = greedy_pi
 
         s_list.append(current_state)
         pi_list.append(pi)
         z_list.append(0)  # to be filled with game outcome later
 
         # select next action with some variation to make examples robust
-
-        if np.random.random() < .05:  # select a random legal action
-            probs = np.ones_like(pi)
-            probs = probs * legal_action_mask
-            probs = probs / np.sum(probs)
-            action = np.random.choice(list(range(game.action_space_size)), p=probs)
-        else:  # select action proportional to determined probs from MCTS
-            action = np.random.choice(list(range(game.action_space_size)), p=pi)
+        action = np.random.choice(list(range(game.action_space_size)), p=pi)
+        # if np.random.random() < .05:  # select a random legal action
+        #     probs = np.ones_like(pi)
+        #     probs = probs * legal_action_mask
+        #     probs = probs / np.sum(probs)
+        #     action = np.random.choice(list(range(game.action_space_size)), p=probs)
+        # else:  # select action proportional to determined probs from MCTS
+        #     action = np.random.choice(list(range(game.action_space_size)), p=pi)
 
         # reward should be +1 if 1st player won, -1 if 2nd player won, 0 if tie
         obs, reward, done = game.step(action)
@@ -352,15 +415,19 @@ def main():
     game = tictactoe()
     input_size = game.obs_space_size
     output_size = game.action_space_size
-    hidden_layer_size = 256
-    agent = AlphaZeroResidual(input_size, hidden_layer_size, output_size)
+    hidden_layer_size = 128
+    # agent = AlphaZeroResidual(input_size, hidden_layer_size, output_size)
+    agent = AlphaZeroConv(input_size, hidden_layer_size, output_size)
     # agent = AlphaZero(input_size, hidden_layer_size, output_size)
     agent.to(device)
+    print(agent)
+    # agent.eval() # sets batch norm properly
+    print(f"Paramters: {sum([p.nelement() for p in agent.parameters()])}")
 
-    iterations = 800  # how many times we want to make training data, update a model
+    iterations = 500  # how many times we want to make training data, update a model
     num_games = 10  # play certain number of games to generate examples each iteration (batches)
     search_steps = 60  # for each step of each game, consider this many possible outcomes
-    optimization_steps = 300  # once we have generated training data, how many epochs do we do on this data
+    optimization_steps = 150  # once we have generated training data, how many epochs do we do on this data
 
     num_faceoff_games = 20  # when comparing updated model and old model, how many games they play to determine winner
 
@@ -371,11 +438,15 @@ def main():
     best_loss = .1
     training_data = None
     new_agent = None
+    do_compare_agents = False
+
     for itr in range(iterations):
         print(f"Starting iteration {itr + 1} / {iterations}")
-        if itr != 0 and itr % lr_decay_period == 0:
-            lr *= lr_decay
-            print(f"Decayed lr to {lr}")
+
+        # if itr != 0 and itr % lr_decay_period == 0:
+        #     lr *= lr_decay
+        #     print(f"Decayed lr to {lr}")
+
         print(f"Generating training data...")
         if training_data is None:
             training_data = generate_training_data(game, num_games, search_steps, agent)
@@ -392,9 +463,12 @@ def main():
         if new_agent is None:  # keep the progress on the new model if we failed to beat the old one
             new_agent = copy.deepcopy(agent)
 
+
         print(f"Improving model...")
+        # agent.train()
         loss, value_loss, policy_loss = improve_model(new_agent, training_data, optimization_steps, lr=lr,
                                                       verbose=False)
+        # agent.eval()
 
         print(f"Finished improving model, total loss: {loss}, value loss: {value_loss}, policy loss: {policy_loss}")
 
@@ -402,17 +476,18 @@ def main():
             torch.save(agent.state_dict(), f"saved_models/tictactoe_agent_{loss}.pt")
             best_loss = loss
 
-        print(f"Comparing agents...")
-        new_wins, old_wins, ties = compare_agents(agent, new_agent, game, num_faceoff_games)
-        print(f"New wins: {new_wins}, old wins: {old_wins}, ties: {ties}")
-        if new_wins > old_wins:
-            agent = new_agent
-            new_agent = None
-            training_data = None
-
-        elif training_data[0].size(0) > 3000:  # prevent getting stuck with a bad model, reset to old model and new data
-            new_agent = None
-            training_data = None
+        if do_compare_agents:
+            # 1. We can compare agents and keep the best one, or  2. just keep improving the same network repeatedly
+            # AlphaGo Zero 1. (the specialized version of the algortihm for Go, a predecessor to the general purpose AlhpaZero)
+            # AlphaZero uses 2.
+            print(f"Comparing agents...")
+            new_wins, old_wins, ties = compare_agents(agent, new_agent, game, num_faceoff_games)
+            print(f"New wins: {new_wins}, old wins: {old_wins}, ties: {ties}")
+            if new_wins > old_wins:
+                agent = new_agent
+                new_agent = None
+        else:
+            agent=new_agent
         training_data = None  # always reset training data, helps?
 
     print("Saving agent")
