@@ -46,6 +46,7 @@ class AlphaZeroConv(torch.nn.Module):
         self.fc_layers = torch.nn.ModuleList(
             [Linear(hidden_layer_dim, hidden_layer_dim), Linear(hidden_layer_dim, hidden_layer_dim)])
 
+        self.batch_norms = torch.nn.ModuleList([BatchNorm1d(hidden_layer_dim) for x in self.fc_layers])
         self.policy_layer = Linear(hidden_layer_dim, output_dim)
         self.value_layer = Linear(hidden_layer_dim, 1)
         self.fc1 = Linear(128, 128)
@@ -65,22 +66,22 @@ class AlphaZeroConv(torch.nn.Module):
         map2 = map2.view(-1, 3, 3)
         turn = torch.ones_like(map1) * turn.unsqueeze(-1).unsqueeze(-1).expand_as(map1)
         h = torch.stack((map1, map2, turn), dim=1)
-        # h = h.unsqueeze(0)
-        h = relu(self.conv2d1(h))
-        h = relu(self.conv2d2(h))
-        h = h.squeeze()
-        h = relu(self.fc1(h))
+       
+        h = leaky_relu(self.conv2d1(h))
+        h = leaky_relu(self.conv2d2(h))
+        h = h.squeeze(-1).squeeze(-1) # reduce to fully connected residual layers
+        h = leaky_relu(self.fc1(h))
         # h = relu(self.input_layer(x))
-        for l in self.fc_layers:  # all the hidden layers
-            h = relu(l(h) + h)
+        for i,l in enumerate(self.fc_layers):  # all the hidden layers
+            h = l(h) + h
+            h = self.batch_norms[i](h)
+            h = leaky_relu(h)
         p = softmax(self.policy_layer(h), dim=-1)  # probs for each action
         _v = self.value_layer(h)  # predict a value for this state
         v = tanh(_v)
 
-        if len(p.size()) == 2:  # we were doing a batch input of vectors x
-            return torch.cat((p, v), dim=1)  # cat along dim 1
-        else:  # a single vector x was input, cat along dim 0
-            return torch.cat((p, v), dim=0)
+        return torch.cat((p, v), dim=1).squeeze()
+
 
 
 class AlphaZero(torch.nn.Module):
@@ -133,7 +134,7 @@ class AlphaZeroResidual(torch.nn.Module):
         h = relu(self.input_layer(x))
         for i, l in enumerate(self.fc_layers):  # all the hidden layers
             h = l(h) + h  # residual block
-            # h = self.batch_norms[i](h)
+            h = self.batch_norms[i](h)
             h = relu(h)
         p = softmax(self.policy_layer(h), dim=-1)  # probs for each action
         _v = self.value_layer(h)  # predict a value for this state
@@ -274,14 +275,14 @@ def simulate_game(game, agent, search_steps):
         z_list.append(0)  # to be filled with game outcome later
 
         # select next action with some variation to make examples robust
-        action = np.random.choice(list(range(game.action_space_size)), p=pi)
-        # if np.random.random() < .05:  # select a random legal action
-        #     probs = np.ones_like(pi)
-        #     probs = probs * legal_action_mask
-        #     probs = probs / np.sum(probs)
-        #     action = np.random.choice(list(range(game.action_space_size)), p=probs)
-        # else:  # select action proportional to determined probs from MCTS
-        #     action = np.random.choice(list(range(game.action_space_size)), p=pi)
+        # action = np.random.choice(list(range(game.action_space_size)), p=pi)
+        if np.random.random() < .05:  # select a random legal action
+            probs = np.ones_like(pi)
+            probs = probs * legal_action_mask
+            probs = probs / np.sum(probs)
+            action = np.random.choice(list(range(game.action_space_size)), p=probs)
+        else:  # select action proportional to determined probs from MCTS
+            action = np.random.choice(list(range(game.action_space_size)), p=pi)
 
         # reward should be +1 if 1st player won, -1 if 2nd player won, 0 if tie
         obs, reward, done = game.step(action)
@@ -316,7 +317,7 @@ def generate_training_data(game, num_games, search_steps, agent):
 
 # set up policy improvement of NN using the simulated games
 def improve_model(model, training_data, steps, lr=.001, verbose=False):
-    optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=0)
+    optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=0.0001)
 
     mean_loss = None
     for i in range(steps):
@@ -421,11 +422,11 @@ def main():
     # agent = AlphaZero(input_size, hidden_layer_size, output_size)
     agent.to(device)
     print(agent)
-    # agent.eval() # sets batch norm properly
+    agent.eval() # sets batch norm properly
     print(f"Paramters: {sum([p.nelement() for p in agent.parameters()])}")
 
     iterations = 500  # how many times we want to make training data, update a model
-    num_games = 10  # play certain number of games to generate examples each iteration (batches)
+    num_games = 20  # play certain number of games to generate examples each iteration (batches)
     search_steps = 60  # for each step of each game, consider this many possible outcomes
     optimization_steps = 150  # once we have generated training data, how many epochs do we do on this data
 
@@ -433,7 +434,7 @@ def main():
 
     lr = .001
     lr_decay = .1
-    lr_decay_period = 100
+    lr_decay_period = 200
 
     best_loss = .1
     training_data = None
@@ -458,6 +459,13 @@ def main():
             z = torch.cat((training_data[2], more_data[2]))
             training_data = [s, pi, z]
 
+        # Clip the training data to hold last 1000 states
+        # Acts as a replay buffer with a sliding window
+        _s = training_data[0][-1000:,:]
+        _pi = training_data[1][-1000:,:]
+        _z = training_data[2][-1000:]
+
+        training_data=[_s,_pi,_z]
         print(f"Generated training data: {training_data[0].size(0)} states")
 
         if new_agent is None:  # keep the progress on the new model if we failed to beat the old one
@@ -465,10 +473,10 @@ def main():
 
 
         print(f"Improving model...")
-        # agent.train()
+        new_agent.train()
         loss, value_loss, policy_loss = improve_model(new_agent, training_data, optimization_steps, lr=lr,
                                                       verbose=False)
-        # agent.eval()
+        new_agent.eval()
 
         print(f"Finished improving model, total loss: {loss}, value loss: {value_loss}, policy loss: {policy_loss}")
 
@@ -488,7 +496,8 @@ def main():
                 new_agent = None
         else:
             agent=new_agent
-        training_data = None  # always reset training data, helps?
+
+        # training_data = None  # always reset training data, helps?
 
     print("Saving agent")
     torch.save(agent.state_dict(), "saved_models/tictactoe_agent.pt")
