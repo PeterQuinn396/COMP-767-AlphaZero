@@ -66,13 +66,13 @@ class AlphaZeroConv(torch.nn.Module):
         map2 = map2.view(-1, 3, 3)
         turn = torch.ones_like(map1) * turn.unsqueeze(-1).unsqueeze(-1).expand_as(map1)
         h = torch.stack((map1, map2, turn), dim=1)
-       
+
         h = leaky_relu(self.conv2d1(h))
         h = leaky_relu(self.conv2d2(h))
-        h = h.squeeze(-1).squeeze(-1) # reduce to fully connected residual layers
+        h = h.squeeze(-1).squeeze(-1)  # reduce to fully connected residual layers
         h = leaky_relu(self.fc1(h))
         # h = relu(self.input_layer(x))
-        for i,l in enumerate(self.fc_layers):  # all the hidden layers
+        for i, l in enumerate(self.fc_layers):  # all the hidden layers
             h = l(h) + h
             h = self.batch_norms[i](h)
             h = leaky_relu(h)
@@ -81,7 +81,6 @@ class AlphaZeroConv(torch.nn.Module):
         v = tanh(_v)
 
         return torch.cat((p, v), dim=1).squeeze()
-
 
 
 class AlphaZero(torch.nn.Module):
@@ -412,6 +411,7 @@ def compare_agents(old_agent, new_agent, game, num_games, greedy=False):  # num_
 
 
 # training loop
+
 def main():
     game = tictactoe()
     input_size = game.obs_space_size
@@ -420,9 +420,10 @@ def main():
     # agent = AlphaZeroResidual(input_size, hidden_layer_size, output_size)
     agent = AlphaZeroConv(input_size, hidden_layer_size, output_size)
     # agent = AlphaZero(input_size, hidden_layer_size, output_size)
+
     agent.to(device)
     print(agent)
-    agent.eval() # sets batch norm properly
+    agent.eval()  # sets batch norm properly
     print(f"Paramters: {sum([p.nelement() for p in agent.parameters()])}")
 
     iterations = 500  # how many times we want to make training data, update a model
@@ -440,7 +441,8 @@ def main():
     training_data = None
     new_agent = None
     do_compare_agents = False
-
+    f = open("saved_models/saved_data.csv", "w+")
+    f.write(f"total loss, value loss, policy loss \n")
     for itr in range(iterations):
         print(f"Starting iteration {itr + 1} / {iterations}")
 
@@ -461,16 +463,15 @@ def main():
 
         # Clip the training data to hold last 1000 states
         # Acts as a replay buffer with a sliding window
-        _s = training_data[0][-1000:,:]
-        _pi = training_data[1][-1000:,:]
+        _s = training_data[0][-1000:, :]
+        _pi = training_data[1][-1000:, :]
         _z = training_data[2][-1000:]
 
-        training_data=[_s,_pi,_z]
+        training_data = [_s, _pi, _z]
         print(f"Generated training data: {training_data[0].size(0)} states")
 
         if new_agent is None:  # keep the progress on the new model if we failed to beat the old one
             new_agent = copy.deepcopy(agent)
-
 
         print(f"Improving model...")
         new_agent.train()
@@ -479,7 +480,7 @@ def main():
         new_agent.eval()
 
         print(f"Finished improving model, total loss: {loss}, value loss: {value_loss}, policy loss: {policy_loss}")
-
+        f.write(f"{loss}, {value_loss}, {policy_loss}")
         if loss < best_loss:  # model is pretty good. lets stop and check it out
             torch.save(agent.state_dict(), f"saved_models/tictactoe_agent_{loss}.pt")
             best_loss = loss
@@ -495,12 +496,15 @@ def main():
                 agent = new_agent
                 new_agent = None
         else:
-            agent=new_agent
+            agent = new_agent
 
         # training_data = None  # always reset training data, helps?
 
     print("Saving agent")
     torch.save(agent.state_dict(), "saved_models/tictactoe_agent.pt")
+    print(f"Best loss seen: {best_loss}")
+
+    f.close()
     return agent
 
 
