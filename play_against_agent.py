@@ -1,7 +1,8 @@
-from alphazero import AlphaZero, AlphaZeroResidual, AlphaZeroConv
+from alphazero import AlphaZero, AlphaZeroResidual, AlphaZeroConv, play_against_heuristics
 from tictactoe import tictactoe
 import torch
 import numpy as np
+
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 # device = "cpu"
@@ -19,7 +20,7 @@ def load_and_play(filename, agent_plays=1, use_heuristic_agent=False):
         agent = None
     else:
         agent = AlphaZeroConv(input_size, hidden_layer_size, output_size)
-        agent.load_state_dict(torch.load(filename))
+        agent.load_state_dict(torch.load(filename, map_location=device))
     play_with_agent(agent, verbose=True, agent_plays=agent_plays, use_heuristic_agent=use_heuristic_agent)
 
 
@@ -67,7 +68,9 @@ def play_with_agent(agent, verbose=False, agent_plays=1, use_heuristic_agent=Fal
                 game.render()
 
         elif agent_plays == 2:
+
             action = int(input("Input play space (0-8): "))
+
             while not game.isLegalAction(action):
                 print("Illegal action")
                 action = int(input("Input play space (0-8): "))
@@ -93,7 +96,20 @@ def play_with_agent(agent, verbose=False, agent_plays=1, use_heuristic_agent=Fal
         print("You won!")
 
 
+
+def agent_play_against_heuristics(filename):
+    game = tictactoe()
+    game.reset()
+    input_size = game.obs_space_size
+    output_size = game.action_space_size
+    hidden_layer_size = 128
+    # agent = AlphaZero(input_size, hidden_layer_size, output_size)
+    # agent = AlphaZeroResidual(input_size, hidden_layer_size, output_size)
+
+    agent = AlphaZeroConv(input_size, hidden_layer_size, output_size)
+    agent.load_state_dict(torch.load(filename, map_location=device))
+
+
 if __name__ == "__main__":
-    load_and_play("saved_models/tictactoe_agent_0.09855037182569504.pt", agent_plays=1,
-                  use_heuristic_agent=True)  # works really well
-    # load_and_play("tictactoe_agent.pt")
+    load_and_play("saved_models/tictactoe_agent_0.09855037182569504.pt", agent_plays=2, use_heuristic_agent=True)      # load_and_play("tictactoe_agent.pt")
+    # agent_play_against_heuristics("best_models/tictactoe_agent_0.01879117079079151.pt")

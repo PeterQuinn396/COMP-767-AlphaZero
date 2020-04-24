@@ -100,6 +100,10 @@ class tictactoe():
         return True, 0
 
     def isLegalAction(self, action):
+        if action<0:
+            return False
+        if action>8:
+            return False
         i = action // 3
         j = action % 3
         return self.game_state[i, j] == 0
@@ -137,15 +141,17 @@ class tictactoe():
                 if done:  # other player would win by playing here
                     return i
 
-        # 3. Take a corner if it is free
+        # 3. Take the center
+        if self.isLegalAction(4):
+            return 4
+
+
+        # 4. Take a corner if it is free
         corners = [0, 2, 6, 8]
         for c in corners:
             if self.isLegalAction(c):
                 return c
 
-        # 4. Take the center
-        if self.isLegalAction(4):
-            return 4
 
         # 5. Take a side
         sides = [1, 3, 5, 7]

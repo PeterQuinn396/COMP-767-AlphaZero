@@ -83,6 +83,75 @@ class AlphaZeroConv(torch.nn.Module):
         return torch.cat((p, v), dim=1).squeeze()
 
 
+class AlphaZeroConvLarge(torch.nn.Module):
+    # Before passing through the NN, convert the +1, -1, 0 representation to a one hot encoding scheme.
+    # We will have 2 3x3 maps with +1 to indicate filled spaces for each player
+    def __init__(self, input_dim, hidden_layer_dim, output_dim):  # should probably use conv layers and residual layers
+        super().__init__()
+        self.input_dim = input_dim
+        self.output_dim = output_dim
+        self.input_layer = Linear(input_dim, hidden_layer_dim)
+
+        self.conv2d1 = torch.nn.Conv2d(3, 128, 2, stride=1)
+        self.conv2d2 = torch.nn.Conv2d(128, 128, 2, stride=1)
+        self.fc_layers = torch.nn.ModuleList(
+            [Linear(hidden_layer_dim, hidden_layer_dim), Linear(hidden_layer_dim, hidden_layer_dim),
+             Linear(hidden_layer_dim, hidden_layer_dim), Linear(hidden_layer_dim, hidden_layer_dim)])
+
+        self.batch_norms = torch.nn.ModuleList([BatchNorm1d(hidden_layer_dim) for x in self.fc_layers])
+
+        self.pre_policy_layers = torch.nn.ModuleList(
+            [Linear(hidden_layer_dim, hidden_layer_dim), Linear(hidden_layer_dim, hidden_layer_dim)])
+        self.policy_layer = Linear(hidden_layer_dim, output_dim)
+
+        self.pre_value_layers = torch.nn.ModuleList(
+            [Linear(hidden_layer_dim, hidden_layer_dim), Linear(hidden_layer_dim, hidden_layer_dim)])
+        self.value_layer = Linear(hidden_layer_dim, 1)
+        self.fc1 = Linear(128, 128)
+
+    def forward(self, x):
+
+        if len(x.shape) == 1:
+            x = x.unsqueeze(0)
+
+        turn = x[:, -1]
+        board = x[:, :-1]
+        zeros = torch.zeros_like(board)
+        map1 = torch.where(board == 1, board, zeros)
+        map2 = torch.where(board == -1, -board, zeros)
+
+        map1 = map1.view(-1, 3, 3)
+        map2 = map2.view(-1, 3, 3)
+        turn = torch.ones_like(map1) * turn.unsqueeze(-1).unsqueeze(-1).expand_as(map1)
+        h = torch.stack((map1, map2, turn), dim=1)
+
+        h = leaky_relu(self.conv2d1(h))
+        h = leaky_relu(self.conv2d2(h))
+        h = h.squeeze(-1).squeeze(-1)  # reduce to fully connected residual layers
+        h = leaky_relu(self.fc1(h))
+        # h = relu(self.input_layer(x))
+        for i, l in enumerate(self.fc_layers):  # all the hidden layers
+            h = l(h) + h
+            h = self.batch_norms[i](h)
+            h = leaky_relu(h)
+
+        _p = h
+        _v = h
+        for l in self.pre_policy_layers:
+            _p = l(_p) + _p
+            _p = leaky_relu(_p)
+
+        p = softmax(self.policy_layer(_p), dim=-1)  # probs for each action
+
+        for l in self.pre_value_layers:
+            _v = l(_v) + _v
+            _v = leaky_relu(_v)
+        _v = self.value_layer(_v)  # predict a value for this state
+        v = tanh(_v)
+
+        return torch.cat((p, v), dim=1).squeeze()
+
+
 class AlphaZero(torch.nn.Module):
 
     def __init__(self, input_dim, hidden_layer_dim, output_dim):  # should probably use conv layers and residual layers
@@ -91,7 +160,8 @@ class AlphaZero(torch.nn.Module):
         self.output_dim = output_dim
         self.input_layer = Linear(input_dim, hidden_layer_dim)
         self.fc_layers = torch.nn.ModuleList(
-            [Linear(hidden_layer_dim, hidden_layer_dim), Linear(hidden_layer_dim, hidden_layer_dim)])
+            [Linear(hidden_layer_dim, hidden_layer_dim), Linear(hidden_layer_dim, hidden_layer_dim),
+             Linear(hidden_layer_dim, hidden_layer_dim)])
         self.policy_layer = Linear(hidden_layer_dim, output_dim)
         self.value_layer = Linear(hidden_layer_dim, 1)
 
@@ -144,7 +214,7 @@ class AlphaZeroResidual(torch.nn.Module):
 
 class Node():
     def __init__(self, state, model, parent_node):
-        self.c = 1  # hyperparameter
+        self.c = 2  # hyperparameter
         self.state = np.copy(state)
         self.z = None
         self.parent = parent_node
@@ -316,7 +386,7 @@ def generate_training_data(game, num_games, search_steps, agent):
 
 # set up policy improvement of NN using the simulated games
 def improve_model(model, training_data, steps, lr=.001, verbose=False):
-    optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=0.0001)
+    optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=0)
 
     mean_loss = None
     for i in range(steps):
@@ -410,6 +480,66 @@ def compare_agents(old_agent, new_agent, game, num_games, greedy=False):  # num_
     return new_wins, old_wins, ties
 
 
+def get_agent_action(agent, game, state, greedy=False, verbose=False):
+    mask = game.getLegalActionMask()
+    x = torch.tensor(state, device=device, dtype=torch.float)
+    y = agent(x)
+    pi = y[:-1]
+    v = y[-1].detach().numpy()
+    _pi = pi.detach().numpy()
+    _pi = _pi * mask
+    _pi = _pi / np.sum(_pi)
+    if greedy:
+        action = np.argmax(_pi)
+    else:
+        action = np.random.choice(list(range(9)), p=_pi)
+
+    if verbose:
+        print(f"Value: {v}, Probs: {_pi}, action: {action}")
+
+    return action
+
+
+def play_against_heuristics(game, agent, agent_plays=1, render=False, verbose=False):
+    obs, r, done = game.reset()
+    while not done:
+        if agent_plays == 1:
+            agent_action = get_agent_action(agent, game, obs, verbose=verbose)
+            obs, reward, done = game.step(agent_action)
+            if render:
+                game.render()
+            # heuristics takes turn
+            if not done:
+                action = game.get_computer_move()
+                obs, reward, done = game.step(action)
+                if render:
+                    game.render()
+
+        elif agent_plays == 2:
+            action = game.get_computer_move()
+            obs, reward, done = game.step(action)
+            if render:
+                game.render()
+            if not done:
+                agent_action = get_agent_action(agent, game, obs, verbose=verbose)
+                obs, reward, done = game.step(agent_action)
+                if render:
+                    game.render()
+
+        else:
+            raise Exception("Invalid value for agent plays parameter. Choose 1 or 2")
+
+    if verbose:
+        if reward == 0:
+            print("Tie game")
+        elif reward == 1 and agent_plays == 1:
+            print("Agent won")
+        else:
+            print("Heuristics won")
+
+    return reward
+
+
 # training loop
 
 def main():
@@ -418,18 +548,19 @@ def main():
     output_size = game.action_space_size
     hidden_layer_size = 128
     # agent = AlphaZeroResidual(input_size, hidden_layer_size, output_size)
-    agent = AlphaZeroConv(input_size, hidden_layer_size, output_size)
+    # agent = AlphaZeroConv(input_size, hidden_layer_size, output_size)
     # agent = AlphaZero(input_size, hidden_layer_size, output_size)
+    agent = AlphaZeroConvLarge(input_size, hidden_layer_size, output_size)
 
     agent.to(device)
     print(agent)
     agent.eval()  # sets batch norm properly
-    print(f"Paramters: {sum([p.nelement() for p in agent.parameters()])}")
+    print(f"Parameters: {sum([p.nelement() for p in agent.parameters()])}")
 
-    iterations = 500  # how many times we want to make training data, update a model
+    iterations = 450  # how many times we want to make training data, update a model
     num_games = 20  # play certain number of games to generate examples each iteration (batches)
-    search_steps = 60  # for each step of each game, consider this many possible outcomes
-    optimization_steps = 150  # once we have generated training data, how many epochs do we do on this data
+    search_steps = 100  # for each step of each game, consider this many possible outcomes
+    optimization_steps = 250  # once we have generated training data, how many epochs do we do on this data
 
     num_faceoff_games = 20  # when comparing updated model and old model, how many games they play to determine winner
 
@@ -437,74 +568,103 @@ def main():
     lr_decay = .1
     lr_decay_period = 200
 
+    replay_buffer_size = 500
     best_loss = .1
     training_data = None
     new_agent = None
     do_compare_agents = False
-    f = open("saved_models/saved_data.csv", "w+")
-    f.write(f"total loss, value loss, policy loss \n")
-    for itr in range(iterations):
-        print(f"Starting iteration {itr + 1} / {iterations}")
+    play_vs_heuristics = True
 
-        # if itr != 0 and itr % lr_decay_period == 0:
-        #     lr *= lr_decay
-        #     print(f"Decayed lr to {lr}")
+    with open("saved_models/saved_data.csv", "w+") as f:
+        f.write(f"total loss, value loss, policy loss, Agent wins, Heuristic wins, Ties\n")
+        for itr in range(iterations):
+            print(f"Starting iteration {itr + 1} / {iterations}")
 
-        print(f"Generating training data...")
-        if training_data is None:
-            training_data = generate_training_data(game, num_games, search_steps, agent)
-        else:  # we generate more data if our improved agent fails to beat the old one
-            print("Generating additional data...")
-            more_data = generate_training_data(game, num_games, search_steps, agent)
-            s = torch.cat((training_data[0], more_data[0]))
-            pi = torch.cat((training_data[1], more_data[1]))
-            z = torch.cat((training_data[2], more_data[2]))
-            training_data = [s, pi, z]
+            # if itr != 0 and itr % lr_decay_period == 0:
+            #     lr *= lr_decay
+            #     print(f"Decayed lr to {lr}")
 
-        # Clip the training data to hold last 1000 states
-        # Acts as a replay buffer with a sliding window
-        _s = training_data[0][-1000:, :]
-        _pi = training_data[1][-1000:, :]
-        _z = training_data[2][-1000:]
+            print(f"Generating training data...")
+            if training_data is None:
+                training_data = generate_training_data(game, num_games, search_steps, agent)
+            else:  # we generate more data if our improved agent fails to beat the old one
+                print("Generating additional data...")
+                more_data = generate_training_data(game, num_games, search_steps, agent)
+                s = torch.cat((training_data[0], more_data[0]))
+                pi = torch.cat((training_data[1], more_data[1]))
+                z = torch.cat((training_data[2], more_data[2]))
+                training_data = [s, pi, z]
 
-        training_data = [_s, _pi, _z]
-        print(f"Generated training data: {training_data[0].size(0)} states")
+            # Clip the training data to hold last states
+            # Acts as a replay buffer with a sliding window
+            _s = training_data[0][-replay_buffer_size:, :]
+            _pi = training_data[1][-replay_buffer_size:, :]
+            _z = training_data[2][-replay_buffer_size:]
 
-        if new_agent is None:  # keep the progress on the new model if we failed to beat the old one
-            new_agent = copy.deepcopy(agent)
+            training_data = [_s, _pi, _z]
+            print(f"Generated training data: {training_data[0].size(0)} states")
 
-        print(f"Improving model...")
-        new_agent.train()
-        loss, value_loss, policy_loss = improve_model(new_agent, training_data, optimization_steps, lr=lr,
-                                                      verbose=False)
-        new_agent.eval()
+            if new_agent is None:  # keep the progress on the new model if we failed to beat the old one
+                new_agent = copy.deepcopy(agent)
 
-        print(f"Finished improving model, total loss: {loss}, value loss: {value_loss}, policy loss: {policy_loss}")
-        f.write(f"{loss}, {value_loss}, {policy_loss}")
-        if loss < best_loss:  # model is pretty good. lets stop and check it out
-            torch.save(agent.state_dict(), f"saved_models/tictactoe_agent_{loss}.pt")
-            best_loss = loss
+            print(f"Improving model...")
+            new_agent.train()
+            loss, value_loss, policy_loss = improve_model(new_agent, training_data, optimization_steps, lr=lr,
+                                                          verbose=False)
+            new_agent.eval()
 
-        if do_compare_agents:
-            # 1. We can compare agents and keep the best one, or  2. just keep improving the same network repeatedly
-            # AlphaGo Zero 1. (the specialized version of the algortihm for Go, a predecessor to the general purpose AlhpaZero)
-            # AlphaZero uses 2.
-            print(f"Comparing agents...")
-            new_wins, old_wins, ties = compare_agents(agent, new_agent, game, num_faceoff_games)
-            print(f"New wins: {new_wins}, old wins: {old_wins}, ties: {ties}")
-            if new_wins > old_wins:
+            print(f"Finished improving model, total loss: {loss}, value loss: {value_loss}, policy loss: {policy_loss}")
+
+            if loss < best_loss:  # model is pretty good. lets stop and check it out
+                torch.save(agent.state_dict(), f"saved_models/tictactoe_agent_{loss}.pt")
+                best_loss = loss
+
+            if do_compare_agents:
+                # 1. We can compare agents and keep the best one, or  2. just keep improving the same network repeatedly
+                # AlphaGo Zero 1. (the specialized version of the algortihm for Go, a predecessor to the general purpose AlhpaZero)
+                # AlphaZero uses 2.
+                print(f"Comparing agents...")
+                new_wins, old_wins, ties = compare_agents(agent, new_agent, game, num_faceoff_games)
+                print(f"New wins: {new_wins}, old wins: {old_wins}, ties: {ties}")
+                if new_wins > old_wins:
+                    agent = new_agent
+                    new_agent = None
+            else:
                 agent = new_agent
-                new_agent = None
-        else:
-            agent = new_agent
 
-        # training_data = None  # always reset training data, helps?
+            if play_vs_heuristics:
+                agent_wins = 0
+                heursitic_wins = 0
+                ties = 0
+                for i in range(num_faceoff_games // 2):
+                    game.reset()
+                    r = play_against_heuristics(game, agent, agent_plays=1)
+                    if r == 0:
+                        ties += 1
+                    elif r == 1:
+                        agent_wins += 1
+                    elif r == -1:
+                        heursitic_wins += 1
 
-    print("Saving agent")
-    torch.save(agent.state_dict(), "saved_models/tictactoe_agent.pt")
-    print(f"Best loss seen: {best_loss}")
+                for i in range(num_faceoff_games // 2):
+                    game.reset()
+                    r = play_against_heuristics(game, agent, agent_plays=2)
+                    if r == 0:
+                        ties += 1
+                    elif r == 1:
+                        heursitic_wins += 1
+                    elif r == -1:
+                        agent_wins += 1
 
-    f.close()
+                print(f"Agent wins: {agent_wins}, Heuristic wins: {heursitic_wins}, Ties: {ties}")
+                f.write(f"{loss}, {value_loss}, {policy_loss}, {agent_wins}, {heursitic_wins}, {ties}\n")
+
+            # training_data = None # reset training data every time, no replay buffer
+
+        print("Saving agent")
+        torch.save(agent.state_dict(), "saved_models/tictactoe_agent.pt")
+        print(f"Best loss seen: {best_loss}")
+
     return agent
 
 
