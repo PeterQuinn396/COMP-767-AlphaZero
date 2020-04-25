@@ -22,7 +22,7 @@ TicTacToeApp::TicTacToeApp()
 
     //csvFileLoc = sarsaCSV;
     csvFileLoc = "C:/Users/mahya/Google Drive/Project767/SARSA_Q_VALUES.csv";
-    //csvFileLoc = "C:/Users/mahya/Google Drive/Project767/a.csv";
+    //csvFileLoc = "C:/Users/mahya/Google Drive/Project767/OffMC_Q_VALUES.csv";
 
     loadQValues();
 
@@ -34,7 +34,7 @@ void TicTacToeApp::update()
     if(!ended)
     {
         // update if it's the agent's turn or it's the player's turn and he has given a valid input
-        if (turn == 1)
+        if (turn == 0)
         {
             //int action = randomAction();
             int action = greedy();
@@ -42,7 +42,7 @@ void TicTacToeApp::update()
             int i = action / 3;
             int j = action % 3;
 
-            S(i, j) = 2;
+            S(i, j) = 1;
 
             // check termination
             if (ended = checkWinner())
@@ -53,7 +53,7 @@ void TicTacToeApp::update()
             // change turn 
             turn = 1 - turn;
         }
-        if (TicTacToeApp::playerAction >= 0 && turn == 0)
+        if (turn == 1 && TicTacToeApp::playerAction >= 0)
         {
 
             int i = TicTacToeApp::playerAction / 3;
@@ -64,7 +64,7 @@ void TicTacToeApp::update()
                 return;
             }
 
-            S(i, j) = 1;
+            S(i, j) = 2;
 
             // check termination
             if (ended = checkWinner())
@@ -127,7 +127,7 @@ int TicTacToeApp::greedy()
     vector<int> A;
     getAvailableActions(A);
 
-    float best_Q = -1e6;
+    float best_Q = -1000000;
     int bestAction = -1;
 
     int x = stateToDecimal(S);
@@ -136,10 +136,16 @@ int TicTacToeApp::greedy()
     {
         int key = getKey(x, a);
         float q = Q[key];
-       
+        
+        cout << "x: " << x << ", a: " << a << ", Q:" << Q[key] << endl;
         if (q > best_Q)
+        {
+            best_Q = q;
             bestAction = a;
+        }
     }
+
+    cout << "selected action: " << bestAction << ", Q: " << Q[getKey(x, bestAction)] << endl;
 
     return bestAction;
 }
@@ -177,7 +183,7 @@ int TicTacToeApp::stateToDecimal(Eigen::Matrix3i ss)
         int y = 1;
         for (int j = 0; j < 3; j++)
         {
-            id += ss(i,j) * x * y;
+            id += (ss(i,j)) * x * y;
             y *= 3;
         }                
         x *= 27;
@@ -205,7 +211,7 @@ void TicTacToeApp::display()
 
     drawBoard();
 
-    string text = "Your role: O \t \t Turn: ";
+    string text = "Your role: X \t \t Turn: ";
     if (turn == 0)
         text += 'O';
     else
@@ -222,11 +228,11 @@ void TicTacToeApp::display()
         }
         if (winner == 0)
         {
-            winText = "Congratulations! you won!";
+            winText = "You lost! try again?";
         }
         if (winner == 1)
         {
-            winText = "You lost! try again?";
+            winText = "Congratulations! you won!";
         }
         
         printText(-0.25f, 0.9f, 0.0f, 0.0f, 0.0f, GLUT_BITMAP_TIMES_ROMAN_24, winText);

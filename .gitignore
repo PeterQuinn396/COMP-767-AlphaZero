@@ -13,6 +13,13 @@ __pycache__/
 
 # Distribution / packaging
 .Python
+/UI/COMP767Project/.vs
+/UI/COMP767Project/Release
+/UI/COMP767Project/Debug
+/UI/COMP767Project/x64
+/UI/COMP767Project/COMP767Project/Debug
+/UI/COMP767Project/COMP767Project/Release
+/UI/COMP767Project/COMP767Project/x64
 build/
 develop-eggs/
 dist/
@@ -31,6 +38,7 @@ share/python-wheels/
 .installed.cfg
 *.egg
 MANIFEST
+
 
 # PyInstaller
 #  Usually these files are written by a python script from a template
