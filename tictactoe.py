@@ -1,5 +1,6 @@
 import numpy as np
 
+
 class tictactoe():
 
     def __init__(self):
@@ -99,6 +100,10 @@ class tictactoe():
         return True, 0
 
     def isLegalAction(self, action):
+        if action<0:
+            return False
+        if action>8:
+            return False
         i = action // 3
         j = action % 3
         return self.game_state[i, j] == 0
@@ -114,6 +119,45 @@ class tictactoe():
         copy_game.game_state = np.copy(self.game_state)
         copy_game.turn = self.turn
         return copy_game
+
+    def get_computer_move(self):  # gets the optimal move for the current player based on some simple heuristics
+        # based on the example heuristics found in https://inventwithpython.com/chapter10.html
+
+        # 1. check if the current player can win immediately
+        for i in range(9):
+            test_game = self.copy()
+            if test_game.isLegalAction(i):
+                obs, reward, done = test_game.step(i)
+                if (done and reward == self.turn):
+                    return i
+
+        # 2. Check if the other player has a square where they could win, if so block them
+
+        for i in range(9):
+            test_game = self.copy()
+            if test_game.isLegalAction(i):
+                test_game.game_state[i // 3, i % 3] = -self.turn
+                done, outcome = test_game.isGameOver()
+                if done:  # other player would win by playing here
+                    return i
+
+        # 3. Take the center
+        if self.isLegalAction(4):
+            return 4
+
+
+        # 4. Take a corner if it is free
+        corners = [0, 2, 6, 8]
+        for c in corners:
+            if self.isLegalAction(c):
+                return c
+
+
+        # 5. Take a side
+        sides = [1, 3, 5, 7]
+        for s in sides:
+            if self.isLegalAction(s):
+                return s
 
 
 def test_tictactoe():
