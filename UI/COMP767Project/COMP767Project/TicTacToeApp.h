@@ -28,11 +28,15 @@ public:
 
 	// game ened
 	bool ended = false;
-
 	// winner
 	int winner = -1;
 
 	int starter = 0;
+
+	static bool inMainMenu;
+
+	int idOfOpponent;
+	std::string nameOfOpponent;
 
 	TicTacToeApp();
 
@@ -74,7 +78,7 @@ public:
 
 	bool shouldCloseWindow();
 
-	void loadQValues();
+	void loadQValues(const char* filename);
 
 private:
 	int getKey(int s, int a);

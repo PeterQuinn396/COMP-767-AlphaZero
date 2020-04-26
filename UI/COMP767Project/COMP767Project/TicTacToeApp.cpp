@@ -13,88 +13,118 @@ using namespace Eigen;
 int screenWidth, screenHeight;
 bool TicTacToeApp::shouldAdvance = false;
 int TicTacToeApp::playerAction = -1;
+bool TicTacToeApp::inMainMenu = true;
 
 TicTacToeApp::TicTacToeApp()
 {
 	initOpenGL();
     initInput();
     initBoard();
-
+    
     //csvFileLoc = sarsaCSV;
-    csvFileLoc = "C:/Users/mahya/Google Drive/Project767/SARSA_Q_VALUES.csv";
+    //csvFileLoc = "C:/Users/mahya/Google Drive/Project767/SARSA_Q_VALUES.csv";
     //csvFileLoc = "C:/Users/mahya/Google Drive/Project767/OffMC_Q_VALUES.csv";
 
-    loadQValues();
+    //loadQValues("SARSA_Q_VALUES.csv");
 
     turn = starter;
 }
 
 void TicTacToeApp::update()
 {
-    if(!ended)
+    if (TicTacToeApp::inMainMenu)
     {
-        // update if it's the agent's turn or it's the player's turn and he has given a valid input
-        if (turn == 0)
+        if (TicTacToeApp::playerAction == 1)
         {
-            //int action = randomAction();
-            int action = greedy();
-
-            int i = action / 3;
-            int j = action % 3;
-
-            S(i, j) = 1;
-
-            // check termination
-            if (ended = checkWinner())
-            {
-                winner = turn;
-                starter = turn;
-            }
-            // change turn 
-            turn = 1 - turn;
-        }
-        if (turn == 1 && TicTacToeApp::playerAction >= 0)
-        {
-
-            int i = TicTacToeApp::playerAction / 3;
-            int j = TicTacToeApp::playerAction % 3;
-
-            if (S(i, j) != 0)
-            {
-                return;
-            }
-
-            S(i, j) = 2;
-
-            // check termination
-            if (ended = checkWinner())
-            {
-                winner = turn;
-                starter = turn;
-            }
-            // change turn 
-            turn = 1 - turn;
-
-            //TicTacToeApp::shouldAdvance = false;
+            idOfOpponent = 1;
+            nameOfOpponent = "SARSA";
+            loadQValues("SARSA_Q_VALUES.csv");
             TicTacToeApp::playerAction = -1;
+            TicTacToeApp::inMainMenu = false;
         }
-        
-        vector<int> A;
-        getAvailableActions(A);
-        if (A.empty() && !ended)
+        /*if (TicTacToeApp::playerAction == 2)
         {
-            // it's a tie
-            starter = 1 - starter;
-            winner = -1;
-            ended = true;
-        }
+            idOfOpponent = 2;
+            nameOfOpponent = "Monte Carlo";
+            loadQValues("OffMC_Q_VALUES.csv");
+            TicTacToeApp::playerAction = -1;
+            TicTacToeApp::inMainMenu = false;
+        }*/
+        /*if (TicTacToeApp::playerAction == 2)
+        {
+            idOfOpponent = 3;
+            nameOfOpponent = "AlphaZero";
+            //loadQValues("OffMC_Q_VALUES.csv");
+            TicTacToeApp::playerAction = -1;
+            TicTacToeApp::inMainMenu = false;
+        }*/
     }
-    
-
-    // Reset Simulation
-    if (glfwGetKey(this->window, GLFW_KEY_R) == GLFW_PRESS)
+    else
     {
-        reset();
+        if (!ended)
+        {
+            // update if it's the agent's turn or it's the player's turn and he has given a valid input
+            if (turn == 0)
+            {
+                //int action = randomAction();
+                int action = greedy();
+
+                int i = action / 3;
+                int j = action % 3;
+
+                S(i, j) = 1;
+
+                // check termination
+                if (ended = checkWinner())
+                {
+                    winner = turn;
+                    starter = turn;
+                }
+                // change turn 
+                turn = 1 - turn;
+            }
+            if (turn == 1 && TicTacToeApp::playerAction >= 0)
+            {
+
+                int i = TicTacToeApp::playerAction / 3;
+                int j = TicTacToeApp::playerAction % 3;
+
+                if (S(i, j) != 0)
+                {
+                    return;
+                }
+
+                S(i, j) = 2;
+
+                // check termination
+                if (ended = checkWinner())
+                {
+                    winner = turn;
+                    starter = turn;
+                }
+                // change turn 
+                turn = 1 - turn;
+
+                //TicTacToeApp::shouldAdvance = false;
+                TicTacToeApp::playerAction = -1;
+            }
+
+            vector<int> A;
+            getAvailableActions(A);
+            if (A.empty() && !ended)
+            {
+                // it's a tie
+                starter = 1 - starter;
+                winner = -1;
+                ended = true;
+            }
+        }
+
+        // Reset Simulation
+        if (glfwGetKey(this->window, GLFW_KEY_R) == GLFW_PRESS)
+        {
+            reset();
+        }
     }
 }
 
@@ -132,12 +162,14 @@ int TicTacToeApp::greedy()
 
     int x = stateToDecimal(S);
 
+    cout << "available actions: " << endl;
     for (int a : A)
     {
         int key = getKey(x, a);
         float q = Q[key];
         
-        cout << "x: " << x << ", a: " << a << ", Q:" << Q[key] << endl;
+        //cout << "x: " << x << ", "; 
+        cout << "a: " << a << ", Q:" << Q[key] << endl;
         if (q > best_Q)
         {
             best_Q = q;
@@ -145,7 +177,7 @@ int TicTacToeApp::greedy()
         }
     }
 
-    cout << "selected action: " << bestAction << ", Q: " << Q[getKey(x, bestAction)] << endl;
+    cout << "selected action: " << bestAction << ", Q: " << Q[getKey(x, bestAction)] << endl << endl;
 
     return bestAction;
 }
@@ -209,36 +241,45 @@ void TicTacToeApp::display()
     glMatrixMode(GL_MODELVIEW); // (default matrix mode) modelview matrix defines how your objects are transformed (meaning translation, rotation and scaling) in your world
     glLoadIdentity(); // same as above comment
 
-    drawBoard();
-
-    string text = "Your role: X \t \t Turn: ";
-    if (turn == 0)
-        text += 'O';
-    else
-        text += 'X';
-
-    printText(-0.8f, 0.8f, 0.0f, 0.0f, 0.0f, GLUT_BITMAP_TIMES_ROMAN_24, text);
-
-    if (ended)
+    if (inMainMenu)
     {
-        string winText;
-        if (winner == -1)
-        {
-            winText = "It's a tie!";
-        }
-        if (winner == 0)
-        {
-            winText = "You lost! try again?";
-        }
-        if (winner == 1)
-        {
-            winText = "Congratulations! you won!";
-        }
-        
-        printText(-0.25f, 0.9f, 0.0f, 0.0f, 0.0f, GLUT_BITMAP_TIMES_ROMAN_24, winText);
-        printText(-0.25f, 0.85f, 0.0f, 0.0f, 0.0f, GLUT_BITMAP_TIMES_ROMAN_24, "Press R to play again.");
+        printText(-0.8f, 0.8f, 0.0f, 0.0f, 0.0f, GLUT_BITMAP_TIMES_ROMAN_24, "Select your opponent: ");
+        printText(-0.8f, 0.7f, 0.0f, 0.0f, 0.0f, GLUT_BITMAP_TIMES_ROMAN_24, "1 - SARSA");
+        printText(-0.8f, 0.6f, 0.0f, 0.0f, 0.0f, GLUT_BITMAP_TIMES_ROMAN_24, "2 - Off-Policy Monte Carlo");
+        printText(-0.8f, 0.5f, 0.0f, 0.0f, 0.0f, GLUT_BITMAP_TIMES_ROMAN_24, "3 - AlphaZero");
     }
+    else
+    {
+        drawBoard();
 
+        string text = "Your role: X, \t" + nameOfOpponent + ": O, \t Turn: ";
+        if (turn == 0)
+            text += 'O';
+        else
+            text += 'X';
+
+        printText(-0.8f, 0.8f, 0.0f, 0.0f, 0.0f, GLUT_BITMAP_TIMES_ROMAN_24, text);
+
+        if (ended)
+        {
+            string winText;
+            if (winner == -1)
+            {
+                winText = "It's a tie!";
+            }
+            if (winner == 0)
+            {
+                winText = "You lost! try again?";
+            }
+            if (winner == 1)
+            {
+                winText = "Congratulations! you won!";
+            }
+
+            printText(-0.25f, 0.9f, 0.0f, 0.0f, 0.0f, GLUT_BITMAP_TIMES_ROMAN_24, winText);
+            printText(-0.25f, 0.85f, 0.0f, 0.0f, 0.0f, GLUT_BITMAP_TIMES_ROMAN_24, "Press R to play again.");
+        }
+    }
     // Swap front and back buffers
     glfwSwapBuffers(window);
 }
@@ -422,21 +463,34 @@ void TicTacToeApp::mouseButtonCallBack(GLFWwindow* window, int button, int actio
 
             //cout << x << ", " << y << endl;
 
-            int action = 0;
-
-            if (x <= -0.75f || x >= 0.75f || y <= -0.75f || y >= 0.75f)
+            if (TicTacToeApp::inMainMenu)
             {
-                action = -1;
+                TicTacToeApp::playerAction = -1;
+                if (x <= 0.0f && x >= -0.9f && y <= -0.65f && y > -0.75f)
+                    TicTacToeApp::playerAction = 1;
+                if (x <= 0.0f && x >= -0.9f && y <= -0.55f && y > -0.65f)
+                    TicTacToeApp::playerAction = 2;
+                if (x <= 0.0f && x >= -0.9f && y <= -0.65f && y > -0.55f)
+                    TicTacToeApp::playerAction = 3;
             }
             else
             {
-                int ix = (int)floorf(2.0f * (x + 0.75f));
-                int iy = (int)floorf(2.0f * (y + 0.75f));
+                int action = 0;
 
-                action = 3 * iy + ix;   
+                if (x <= -0.75f || x >= 0.75f || y <= -0.75f || y >= 0.75f)
+                {
+                    action = -1;
+                }
+                else
+                {
+                    int ix = (int)floorf(2.0f * (x + 0.75f));
+                    int iy = (int)floorf(2.0f * (y + 0.75f));
+
+                    action = 3 * iy + ix;
+                }
+                TicTacToeApp::playerAction = action;
             }
-
-            TicTacToeApp::playerAction = action;
+            
 
            // cout << action << endl << endl;
         }
@@ -449,15 +503,15 @@ bool TicTacToeApp::shouldCloseWindow()
 	return glfwWindowShouldClose(window);
 }
 
-void TicTacToeApp::loadQValues()
+void TicTacToeApp::loadQValues(const char* filename)
 {
 	Q.clear();
 
     // File pointer 
     fstream fin;
-
+    
     // Open an existing file 
-    fin.open(csvFileLoc, ios::in);
+    fin.open(filename, ios::in);
     
     int count = 0;
 
@@ -497,6 +551,8 @@ void TicTacToeApp::loadQValues()
     }
     if (count == 0)
         cout << "Record not found\n";
+    else
+        cout << "Q values loaded!" << endl << endl;
    /* else
     {
         for (auto it = Q.begin(); it != Q.end(); ++it)
