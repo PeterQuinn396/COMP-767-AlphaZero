@@ -332,20 +332,20 @@ def simulate_game(game, agent, search_steps):
         pi = pi / np.sum(pi)
 
         # save the true distribution or a greedy version of it
-        # if np.random.random() < .1:
-        #     _pi = pi
-        # else:
-        #     greedy_pi = np.zeros_like(pi)
-        #     greedy_pi[np.argmax(pi)] = 1
-        #     _pi = greedy_pi
+        if np.random.random() < .05:
+            _pi = pi
+        else:
+            greedy_pi = np.zeros_like(pi)
+            greedy_pi[np.argmax(pi)] = 1
+            _pi = greedy_pi
 
         s_list.append(current_state)
-        pi_list.append(pi)
+        pi_list.append(_pi)
         z_list.append(0)  # to be filled with game outcome later
 
         # select next action with some variation to make examples robust
         # action = np.random.choice(list(range(game.action_space_size)), p=pi)
-        if np.random.random() < .05:  # select a random legal action
+        if np.random.random() < .1:  # select a random legal action
             probs = np.ones_like(pi)
             probs = probs * legal_action_mask
             probs = probs / np.sum(probs)
@@ -485,8 +485,8 @@ def get_agent_action(agent, game, state, greedy=False, verbose=False):
     x = torch.tensor(state, device=device, dtype=torch.float)
     y = agent(x)
     pi = y[:-1]
-    v = y[-1].detach().numpy()
-    _pi = pi.detach().numpy()
+    v = y[-1].detach().cpu().numpy()
+    _pi = pi.detach().cpu().numpy() + 1e-6 # for numerical stability
     _pi = _pi * mask
     _pi = _pi / np.sum(_pi)
     if greedy:
@@ -548,23 +548,23 @@ def main():
     output_size = game.action_space_size
     hidden_layer_size = 128
     # agent = AlphaZeroResidual(input_size, hidden_layer_size, output_size)
-    # agent = AlphaZeroConv(input_size, hidden_layer_size, output_size)
+    agent = AlphaZeroConv(input_size, hidden_layer_size, output_size)
     # agent = AlphaZero(input_size, hidden_layer_size, output_size)
-    agent = AlphaZeroConvLarge(input_size, hidden_layer_size, output_size)
+    # agent = AlphaZeroConvLarge(input_size, hidden_layer_size, output_size)
 
     agent.to(device)
     print(agent)
     agent.eval()  # sets batch norm properly
     print(f"Parameters: {sum([p.nelement() for p in agent.parameters()])}")
 
-    iterations = 450  # how many times we want to make training data, update a model
+    iterations = 300  # how many times we want to make training data, update a model
     num_games = 20  # play certain number of games to generate examples each iteration (batches)
-    search_steps = 100  # for each step of each game, consider this many possible outcomes
-    optimization_steps = 250  # once we have generated training data, how many epochs do we do on this data
+    search_steps = 60  # for each step of each game, consider this many possible outcomes
+    optimization_steps = 150  # once we have generated training data, how many epochs do we do on this data
 
     num_faceoff_games = 20  # when comparing updated model and old model, how many games they play to determine winner
 
-    lr = .001
+    lr = .0001
     lr_decay = .1
     lr_decay_period = 200
 
