@@ -14,12 +14,13 @@ def load_and_play(filename, agent_plays=1, use_heuristic_agent=False):
     input_size = game.obs_space_size
     output_size = game.action_space_size
     hidden_layer_size = 128
-    # agent = AlphaZero(input_size, hidden_layer_size, output_size)
-    # agent = AlphaZeroResidual(input_size, hidden_layer_size, output_size)
+
     if use_heuristic_agent:
         agent = None
     else:
-        agent = AlphaZeroConv(input_size, hidden_layer_size, output_size)
+        agent = AlphaZero(input_size, hidden_layer_size, output_size)
+        # agent = AlphaZeroResidual(input_size, hidden_layer_size, output_size)
+        # agent = AlphaZeroConv(input_size, hidden_layer_size, output_size)
         agent.load_state_dict(torch.load(filename, map_location=device))
     play_with_agent(agent, verbose=True, agent_plays=agent_plays, use_heuristic_agent=use_heuristic_agent)
 
@@ -111,5 +112,5 @@ def agent_play_against_heuristics(filename):
 
 
 if __name__ == "__main__":
-    load_and_play("saved_models/tictactoe_agent_0.09855037182569504.pt", agent_plays=2, use_heuristic_agent=True)      # load_and_play("tictactoe_agent.pt")
+    load_and_play("final data and models/fc/tictactoe_agent.pt", agent_plays=1)      # load_and_play("tictactoe_agent.pt")
     # agent_play_against_heuristics("best_models/tictactoe_agent_0.01879117079079151.pt")
