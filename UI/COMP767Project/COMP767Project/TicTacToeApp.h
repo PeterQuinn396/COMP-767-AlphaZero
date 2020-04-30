@@ -16,9 +16,9 @@ public:
 
 	GLFWwindow* window;
 
-	std::unordered_map<int, float> Q;
+	std::unordered_map<int, float> Q_SARSA;
+	std::unordered_map<int, float> Q_MC;
 
-	const char* csvFileLoc;
 
 	// state of the game
 	Eigen::Matrix3i S;
@@ -51,7 +51,7 @@ public:
 	void getAvailableActions(std::vector<int> &A);
 
 	// chooses greedy action based on the current state and Q-values
-	int greedy();
+	int greedy(std::unordered_map<int, float> Q);
 
 	int randomAction();
 
@@ -66,7 +66,6 @@ public:
 
 	void initOpenGL();
 	void initInput();
-
 	void initBoard();
 
 	void printText(float x, float y, float r, float g, float b, void* font, std::string text);
@@ -74,11 +73,9 @@ public:
 	void drawX(float x, float y, float scale);
 	void drawO(float x, float y, float scale);
 
-	void displayWinMessage();
-
 	bool shouldCloseWindow();
 
-	void loadQValues(const char* filename);
+	void loadQValues(const char* filename, std::unordered_map<int, float> &Q);
 
 private:
 	int getKey(int s, int a);

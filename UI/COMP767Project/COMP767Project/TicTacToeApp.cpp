@@ -1,14 +1,19 @@
 #include "TicTacToeApp.h"
 
+#include "AlphaZero.h"
+
 #include <iostream>
 #include <fstream>
 #include <cstdlib>
 
 #include <Eigen/Dense>
 
+//#include <torch/script.h>
+//#include <torch/serialize.h>
+//#include <torch/optim.h>
+
 using namespace std;
 using namespace Eigen;
-
 
 int screenWidth, screenHeight;
 bool TicTacToeApp::shouldAdvance = false;
@@ -20,14 +25,21 @@ TicTacToeApp::TicTacToeApp()
 	initOpenGL();
     initInput();
     initBoard();
-    
-    //csvFileLoc = sarsaCSV;
-    //csvFileLoc = "C:/Users/mahya/Google Drive/Project767/SARSA_Q_VALUES.csv";
-    //csvFileLoc = "C:/Users/mahya/Google Drive/Project767/OffMC_Q_VALUES.csv";
-
-    //loadQValues("SARSA_Q_VALUES.csv");
 
     turn = starter;
+
+    // Load SARSA (1)
+    loadQValues("SARSA_Q_VALUES.csv", Q_SARSA);
+
+    // Load MC (2)
+    loadQValues("OffMC_Q_VALUES.csv", Q_MC);
+
+    // Load AlphaZero (3)
+    /*int obs_space_size = 9 + 1;
+    int action_space_size = 0;
+    int hidden_layer_size = 128;
+    AlphaZero* alphaAgent = new AlphaZero(obs_space_size, hidden_layer_size, action_space_size);
+    torch::load(alphaAgent, "tictactoe_agent.pt");*/
 }
 
 void TicTacToeApp::update()
@@ -38,23 +50,20 @@ void TicTacToeApp::update()
         {
             idOfOpponent = 1;
             nameOfOpponent = "SARSA";
-            loadQValues("SARSA_Q_VALUES.csv");
             TicTacToeApp::playerAction = -1;
             TicTacToeApp::inMainMenu = false;
         }
-        /*if (TicTacToeApp::playerAction == 2)
+        if (TicTacToeApp::playerAction == 2)
         {
             idOfOpponent = 2;
             nameOfOpponent = "Monte Carlo";
-            loadQValues("OffMC_Q_VALUES.csv");
             TicTacToeApp::playerAction = -1;
             TicTacToeApp::inMainMenu = false;
-        }*/
-        /*if (TicTacToeApp::playerAction == 2)
+        }
+        /*if (TicTacToeApp::playerAction == 3)
         {
             idOfOpponent = 3;
             nameOfOpponent = "AlphaZero";
-            //loadQValues("OffMC_Q_VALUES.csv");
             TicTacToeApp::playerAction = -1;
             TicTacToeApp::inMainMenu = false;
         }*/
@@ -67,7 +76,14 @@ void TicTacToeApp::update()
             if (turn == 0)
             {
                 //int action = randomAction();
-                int action = greedy();
+                int action = -1;
+                if (idOfOpponent == 1)
+                    action = greedy(Q_SARSA);
+                if (idOfOpponent == 2)
+                    action = greedy(Q_MC);
+                
+                if (action == -1)
+                    cout << "something wrong!" << endl;
 
                 int i = action / 3;
                 int j = action % 3;
@@ -85,7 +101,6 @@ void TicTacToeApp::update()
             }
             if (turn == 1 && TicTacToeApp::playerAction >= 0)
             {
-
                 int i = TicTacToeApp::playerAction / 3;
                 int j = TicTacToeApp::playerAction % 3;
 
@@ -125,6 +140,16 @@ void TicTacToeApp::update()
         {
             reset();
         }
+        if (glfwGetKey(this->window, GLFW_KEY_E) == GLFW_PRESS)
+        {
+            // go to main menu
+            TicTacToeApp::inMainMenu = true;
+            idOfOpponent = 0;
+            nameOfOpponent = "";
+            TicTacToeApp::playerAction = -1;
+            // reset the game
+            reset();
+        }
     }
 }
 
@@ -152,7 +177,7 @@ void TicTacToeApp::getAvailableActions(vector<int>& A)
     }
 }
 
-int TicTacToeApp::greedy()
+int TicTacToeApp::greedy(std::unordered_map<int, float> Q)
 {
     vector<int> A;
     getAvailableActions(A);
@@ -241,12 +266,16 @@ void TicTacToeApp::display()
     glMatrixMode(GL_MODELVIEW); // (default matrix mode) modelview matrix defines how your objects are transformed (meaning translation, rotation and scaling) in your world
     glLoadIdentity(); // same as above comment
 
+    printText(-0.6f, -0.85f, 0.0f, 0.0f, 0.0f, GLUT_BITMAP_TIMES_ROMAN_24, "Mahyar Bayran, Peter Quinn, COMP 767 Project, Winter 2020");
+
     if (inMainMenu)
-    {
-        printText(-0.8f, 0.8f, 0.0f, 0.0f, 0.0f, GLUT_BITMAP_TIMES_ROMAN_24, "Select your opponent: ");
-        printText(-0.8f, 0.7f, 0.0f, 0.0f, 0.0f, GLUT_BITMAP_TIMES_ROMAN_24, "1 - SARSA");
-        printText(-0.8f, 0.6f, 0.0f, 0.0f, 0.0f, GLUT_BITMAP_TIMES_ROMAN_24, "2 - Off-Policy Monte Carlo");
-        printText(-0.8f, 0.5f, 0.0f, 0.0f, 0.0f, GLUT_BITMAP_TIMES_ROMAN_24, "3 - AlphaZero");
+    {  
+        printText(-0.8f, 0.9f, 0.0f, 0.0f, 0.0f, GLUT_BITMAP_TIMES_ROMAN_24, "Tic Tac Toe ");
+        printText(-0.8f, 0.85f, 0.0f, 0.0f, 0.0f, GLUT_BITMAP_TIMES_ROMAN_24, "Main Menu");
+        printText(-0.8f, 0.6f, 0.0f, 0.0f, 0.0f, GLUT_BITMAP_TIMES_ROMAN_24, "Select your opponent: ");
+        printText(-0.8f, 0.5f, 0.0f, 0.0f, 0.0f, GLUT_BITMAP_TIMES_ROMAN_24, "1 - SARSA");
+        printText(-0.8f, 0.4f, 0.0f, 0.0f, 0.0f, GLUT_BITMAP_TIMES_ROMAN_24, "2 - Off-Policy Monte Carlo");
+        //printText(-0.8f, 0.3f, 0.0f, 0.0f, 0.0f, GLUT_BITMAP_TIMES_ROMAN_24, "3 - AlphaZero");
     }
     else
     {
@@ -258,7 +287,7 @@ void TicTacToeApp::display()
         else
             text += 'X';
 
-        printText(-0.8f, 0.8f, 0.0f, 0.0f, 0.0f, GLUT_BITMAP_TIMES_ROMAN_24, text);
+        printText(-0.8f, 0.77f, 0.0f, 0.0f, 0.0f, GLUT_BITMAP_TIMES_ROMAN_24, text);
 
         if (ended)
         {
@@ -276,8 +305,8 @@ void TicTacToeApp::display()
                 winText = "Congratulations! you won!";
             }
 
-            printText(-0.25f, 0.9f, 0.0f, 0.0f, 0.0f, GLUT_BITMAP_TIMES_ROMAN_24, winText);
-            printText(-0.25f, 0.85f, 0.0f, 0.0f, 0.0f, GLUT_BITMAP_TIMES_ROMAN_24, "Press R to play again.");
+            printText(-0.8f, 0.9f, 0.0f, 0.0f, 0.0f, GLUT_BITMAP_TIMES_ROMAN_24, winText);
+            printText(-0.8f, 0.84f, 0.0f, 0.0f, 0.0f, GLUT_BITMAP_TIMES_ROMAN_24, "Press R to play again. Press E to go back to Main Menu.");
         }
     }
     // Swap front and back buffers
@@ -434,10 +463,6 @@ void TicTacToeApp::drawO(float x, float y, float scale)
     glEnd();
 }
 
-void TicTacToeApp::displayWinMessage()
-{
-}
-
 void TicTacToeApp::key_callback(GLFWwindow* window, int key, int scancode, int action, int mods)
 {
     if (key == GLFW_KEY_ESCAPE && action == GLFW_PRESS)
@@ -466,12 +491,12 @@ void TicTacToeApp::mouseButtonCallBack(GLFWwindow* window, int button, int actio
             if (TicTacToeApp::inMainMenu)
             {
                 TicTacToeApp::playerAction = -1;
-                if (x <= 0.0f && x >= -0.9f && y <= -0.65f && y > -0.75f)
+                if (x <= 0.0f && x >= -0.9f && y <= -0.45f && y > -0.55f)
                     TicTacToeApp::playerAction = 1;
-                if (x <= 0.0f && x >= -0.9f && y <= -0.55f && y > -0.65f)
+                if (x <= 0.0f && x >= -0.9f && y <= -0.35f && y > -0.45f)
                     TicTacToeApp::playerAction = 2;
-                if (x <= 0.0f && x >= -0.9f && y <= -0.65f && y > -0.55f)
-                    TicTacToeApp::playerAction = 3;
+               // if (x <= 0.0f && x >= -0.9f && y <= -0.25f && y > -0.35f)
+               //     TicTacToeApp::playerAction = 3;
             }
             else
             {
@@ -490,8 +515,6 @@ void TicTacToeApp::mouseButtonCallBack(GLFWwindow* window, int button, int actio
                 }
                 TicTacToeApp::playerAction = action;
             }
-            
-
            // cout << action << endl << endl;
         }
     }
@@ -503,7 +526,7 @@ bool TicTacToeApp::shouldCloseWindow()
 	return glfwWindowShouldClose(window);
 }
 
-void TicTacToeApp::loadQValues(const char* filename)
+void TicTacToeApp::loadQValues(const char* filename, std::unordered_map<int, float> &Q)
 {
 	Q.clear();
 
@@ -561,6 +584,7 @@ void TicTacToeApp::loadQValues(const char* filename)
     
     fin.close();
 }
+
 
 int TicTacToeApp::getKey(int s, int a)
 {
