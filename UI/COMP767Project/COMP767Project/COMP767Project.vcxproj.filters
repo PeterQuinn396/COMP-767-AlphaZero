@@ -36,4 +36,8 @@
       <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>
+  <ItemGroup>
+    <CopyFileToFolders Include="OffMC_Q_VALUES.csv" />
+    <CopyFileToFolders Include="SARSA_Q_VALUES.csv" />
+  </ItemGroup>
 </Project>

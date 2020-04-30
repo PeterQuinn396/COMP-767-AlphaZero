@@ -160,7 +160,15 @@
     <ClCompile Include="TicTacToeApp.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <CopyFileToFolders Include="OffMC_Q_VALUES.csv">
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</ExcludedFromBuild>
+      <FileType>Document</FileType>
+    </CopyFileToFolders>
     <None Include="packages.config" />
+    <CopyFileToFolders Include="SARSA_Q_VALUES.csv">
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</ExcludedFromBuild>
+      <FileType>Document</FileType>
+    </CopyFileToFolders>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="AlphaZero.h" />
