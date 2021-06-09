@@ -32,16 +32,11 @@ class tictactoe():
         self.turn = -self.turn  # other players turn
         done, outcome = self.isGameOver()
 
-        if done:
-            obs = None  # if we are done, obs should not matter and should not be checked
-            return obs, outcome, done
-
         obs = self.game_state.flatten()
         obs = np.append(obs, [self.turn])
-        reward = 0
-        done = False
 
-        return obs, reward, done
+        return obs, outcome, done
+
 
     def render(self):
         print(self.game_state)

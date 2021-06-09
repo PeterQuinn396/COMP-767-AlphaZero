@@ -13,7 +13,7 @@ def load_and_play(filename, agent_plays=1, use_heuristic_agent=False):
     game = tictactoe()
     input_size = game.obs_space_size
     output_size = game.action_space_size
-    hidden_layer_size = 128
+    hidden_layer_size = 64
 
     if use_heuristic_agent:
         agent = None
@@ -112,5 +112,5 @@ def agent_play_against_heuristics(filename):
 
 
 if __name__ == "__main__":
-    load_and_play("final data and models/fc/tictactoe_agent.pt", agent_plays=1)      # load_and_play("tictactoe_agent.pt")
+    load_and_play("saved_models/tictactoe_agent.pt", agent_plays=1)      # load_and_play("tictactoe_agent.pt")
     # agent_play_against_heuristics("best_models/tictactoe_agent_0.01879117079079151.pt")

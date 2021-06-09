@@ -160,7 +160,7 @@ class AlphaZero(torch.nn.Module):
         self.output_dim = output_dim
         self.input_layer = Linear(input_dim, hidden_layer_dim)
         self.fc_layers = torch.nn.ModuleList(
-            [Linear(hidden_layer_dim, hidden_layer_dim), Linear(hidden_layer_dim, hidden_layer_dim),
+            [Linear(hidden_layer_dim, hidden_layer_dim),
              Linear(hidden_layer_dim, hidden_layer_dim)])
         self.policy_layer = Linear(hidden_layer_dim, output_dim)
         self.value_layer = Linear(hidden_layer_dim, 1)
@@ -214,7 +214,7 @@ class AlphaZeroResidual(torch.nn.Module):
 
 class Node():
     def __init__(self, state, model, parent_node):
-        self.c = 2  # hyperparameter
+        self.c = 3  # hyperparameter
         self.state = np.copy(state)
         self.z = None
         self.parent = parent_node
@@ -240,6 +240,8 @@ def search(current_node, node_dict, agent, game):  # get the next action for the
 
     mask = game.getLegalActionMask()
     u_masked = mask * u
+
+
     u_masked[u_masked == 0] = np.nan  # make the zeros nans so they are ignored by the argmax
     action = np.nanargmax(u_masked)
 
@@ -262,6 +264,7 @@ def search(current_node, node_dict, agent, game):  # get the next action for the
             return
         else:  # this is a new state not currently in the tree, we create the new node and backpropagate its value up the tree
             new_node = make_new_node_in_tree(next_state, node_dict, agent, current_node)
+            # propagate_value_up_tree(new_node, new_node.value) # done in make_new_node_in_tree
             # we only search the next node if it was already in the tree
             return
 
@@ -332,12 +335,13 @@ def simulate_game(game, agent, search_steps):
         pi = pi / np.sum(pi)
 
         # save the true distribution or a greedy version of it
-        if np.random.random() < .05:
-            _pi = pi
-        else:
-            greedy_pi = np.zeros_like(pi)
-            greedy_pi[np.argmax(pi)] = 1
-            _pi = greedy_pi
+        # if np.random.random() < .05:
+        #     _pi = pi
+        # else:
+        #     greedy_pi = np.zeros_like(pi)
+        #     greedy_pi[np.argmax(pi)] = 1
+        #     _pi = greedy_pi
+        _pi = pi
 
         s_list.append(current_state)
         pi_list.append(_pi)
@@ -351,14 +355,19 @@ def simulate_game(game, agent, search_steps):
             probs = probs / np.sum(probs)
             action = np.random.choice(list(range(game.action_space_size)), p=probs)
         else:  # select action proportional to determined probs from MCTS
+
             action = np.random.choice(list(range(game.action_space_size)), p=pi)
 
         # reward should be +1 if 1st player won, -1 if 2nd player won, 0 if tie
         obs, reward, done = game.step(action)
 
-        if done:
-            for i, z in enumerate(z_list):  # fill in the outcome for every tuple along this path
-                z_list[i] = reward
+        if done: # save data about winning state
+            s_list.append(obs)
+            pi_list.append(np.zeros_like(_pi))
+            z_list.append(reward)
+
+    for i in range(len(z_list)):  # fill in the outcome for every tuple along this path
+        z_list[i] = reward
 
     return s_list, pi_list, z_list
 
@@ -386,7 +395,7 @@ def generate_training_data(game, num_games, search_steps, agent):
 
 # set up policy improvement of NN using the simulated games
 def improve_model(model, training_data, steps, lr=.001, verbose=False):
-    optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=0)
+    optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=0.01)
 
     mean_loss = None
     for i in range(steps):
@@ -495,7 +504,10 @@ def get_agent_action(agent, game, state, greedy=False, verbose=False):
         action = np.random.choice(list(range(9)), p=_pi)
 
     if verbose:
-        print(f"Value: {v}, Probs: {_pi}, action: {action}")
+        print(f" Value: {v}, action: {action}")
+        print(f"{state[0]} {state[1]} {state[2]} || {_pi[0]:.3f} {_pi[1]:.3f} {_pi[2]:.3f}")
+        print(f"{state[3]} {state[4]} {state[5]} || {_pi[3]:.3f} {_pi[4]:.3f} {_pi[5]:.3f}")
+        print(f"{state[6]} {state[7]} {state[8]} || {_pi[6]:.3f} {_pi[7]:.3f} {_pi[8]:.3f}")
 
     return action
 
@@ -504,7 +516,7 @@ def play_against_heuristics(game, agent, agent_plays=1, render=False, verbose=Fa
     obs, r, done = game.reset()
     while not done:
         if agent_plays == 1:
-            agent_action = get_agent_action(agent, game, obs, verbose=verbose)
+            agent_action = get_agent_action(agent, game, obs, greedy=True, verbose=False)
             obs, reward, done = game.step(agent_action)
             if render:
                 game.render()
@@ -521,7 +533,7 @@ def play_against_heuristics(game, agent, agent_plays=1, render=False, verbose=Fa
             if render:
                 game.render()
             if not done:
-                agent_action = get_agent_action(agent, game, obs, verbose=verbose)
+                agent_action = get_agent_action(agent, game, obs, greedy=True, verbose=False)
                 obs, reward, done = game.step(agent_action)
                 if render:
                     game.render()
@@ -546,9 +558,9 @@ def main():
     game = tictactoe()
     input_size = game.obs_space_size
     output_size = game.action_space_size
-    hidden_layer_size = 128
+    hidden_layer_size = 64
     # agent = AlphaZeroResidual(input_size, hidden_layer_size, output_size)
-    agent = AlphaZeroConv(input_size, hidden_layer_size, output_size)
+    agent = AlphaZero(input_size, hidden_layer_size, output_size)
     # agent = AlphaZero(input_size, hidden_layer_size, output_size)
     # agent = AlphaZeroConvLarge(input_size, hidden_layer_size, output_size)
 
@@ -557,18 +569,18 @@ def main():
     agent.eval()  # sets batch norm properly
     print(f"Parameters: {sum([p.nelement() for p in agent.parameters()])}")
 
-    iterations = 300  # how many times we want to make training data, update a model
+    iterations = 100  # how many times we want to make training data, update a model
     num_games = 20  # play certain number of games to generate examples each iteration (batches)
-    search_steps = 60  # for each step of each game, consider this many possible outcomes
-    optimization_steps = 150  # once we have generated training data, how many epochs do we do on this data
+    search_steps = 20  # for each step of each game, consider this many possible outcomes
+    optimization_steps = 50  # once we have generated training data, how many epochs do we do on this data
 
-    num_faceoff_games = 20  # when comparing updated model and old model, how many games they play to determine winner
+    num_faceoff_games = 2  # when comparing updated model and old model, how many games they play to determine winner
 
-    lr = .0001
+    lr = .01
     lr_decay = .1
     lr_decay_period = 200
 
-    replay_buffer_size = 500
+    replay_buffer_size = 300
     best_loss = .1
     training_data = None
     new_agent = None
@@ -633,8 +645,10 @@ def main():
                 agent = new_agent
 
             if play_vs_heuristics:
-                agent_wins = 0
-                heursitic_wins = 0
+                agent_wins_first = 0
+                agent_wins_second = 0
+                heursitic_wins_first = 0
+                heursitic_wins_second = 0
                 ties = 0
                 for i in range(num_faceoff_games // 2):
                     game.reset()
@@ -642,9 +656,9 @@ def main():
                     if r == 0:
                         ties += 1
                     elif r == 1:
-                        agent_wins += 1
+                        agent_wins_first += 1
                     elif r == -1:
-                        heursitic_wins += 1
+                        heursitic_wins_second += 1
 
                 for i in range(num_faceoff_games // 2):
                     game.reset()
@@ -652,12 +666,13 @@ def main():
                     if r == 0:
                         ties += 1
                     elif r == 1:
-                        heursitic_wins += 1
+                        heursitic_wins_first += 1
                     elif r == -1:
-                        agent_wins += 1
+                        agent_wins_second += 1
 
-                print(f"Agent wins: {agent_wins}, Heuristic wins: {heursitic_wins}, Ties: {ties}")
-                f.write(f"{loss}, {value_loss}, {policy_loss}, {agent_wins}, {heursitic_wins}, {ties}\n")
+                print(f"Agent wins: ({agent_wins_first},{agent_wins_second}) , Heuristic wins: ({heursitic_wins_first},{heursitic_wins_second}) , "
+                      f"Ties: {ties}")
+                f.write(f"{loss}, {value_loss}, {policy_loss}, {agent_wins_first+agent_wins_second}, {heursitic_wins_first+heursitic_wins_second}, {ties}\n")
 
             # training_data = None # reset training data every time, no replay buffer
 
