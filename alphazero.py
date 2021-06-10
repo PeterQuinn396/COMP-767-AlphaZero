@@ -214,7 +214,7 @@ class AlphaZeroResidual(torch.nn.Module):
 
 class Node():
     def __init__(self, state, model, parent_node):
-        self.c = 3  # hyperparameter
+        self.c = 1  # hyperparameter
         self.state = np.copy(state)
         self.z = None
         self.parent = parent_node
@@ -227,7 +227,7 @@ class Node():
         self.value = predict[-1].detach().cpu().numpy()  # nor here
 
         action_size = predict.size()[0] - 1
-        self.Q = np.zeros(action_size)
+        self.Q = .5 * np.ones(action_size) #.zeros(action_size)
         self.actions_taken = np.zeros(action_size)
         self.last_action = -1  # used when we pass back through the tree to update Q values
 
@@ -241,9 +241,15 @@ def search(current_node, node_dict, agent, game):  # get the next action for the
     mask = game.getLegalActionMask()
     u_masked = mask * u
 
-
     u_masked[u_masked == 0] = np.nan  # make the zeros nans so they are ignored by the argmax
     action = np.nanargmax(u_masked)
+
+    if np.random.random() < .2:  # select a random legal action
+        probs = np.ones_like(u_masked)
+        probs = probs * mask
+        probs = probs / np.sum(probs)
+        action = np.random.choice(list(range(game.action_space_size)), p=probs)
+
 
     current_node.last_action = action
     current_node.actions_taken[action] += 1
@@ -332,7 +338,7 @@ def simulate_game(game, agent, search_steps):
         # normalize the actions taken during the searching to get probabilities learned during MCTS
         legal_action_mask = game.getLegalActionMask()
         pi = current_node.actions_taken * legal_action_mask
-        pi = pi / np.sum(pi)
+        pi = pi / np.sum(pi) # softmax?
 
         # save the true distribution or a greedy version of it
         # if np.random.random() < .05:
@@ -349,7 +355,7 @@ def simulate_game(game, agent, search_steps):
 
         # select next action with some variation to make examples robust
         # action = np.random.choice(list(range(game.action_space_size)), p=pi)
-        if np.random.random() < .1:  # select a random legal action
+        if np.random.random() < .2:  # select a random legal action
             probs = np.ones_like(pi)
             probs = probs * legal_action_mask
             probs = probs / np.sum(probs)
@@ -390,38 +396,50 @@ def generate_training_data(game, num_games, search_steps, agent):
         pi = torch.cat((pi, _pi))
         z = torch.cat((z, _z))
 
+    print(f"Generated {s.size(0)} new states")
     return s, pi, z
 
 
 # set up policy improvement of NN using the simulated games
-def improve_model(model, training_data, steps, lr=.001, verbose=False):
-    optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=0.01)
+def improve_model(model, training_data, epochs, optimizer, batch_size = 64, verbose=False):
+
 
     mean_loss = None
-    for i in range(steps):
-        s = training_data[0]
-        pi = training_data[1]
-        z = training_data[2]
+    s = training_data[0]
+    pi = training_data[1]
+    z = training_data[2]
 
-        y = model(s)
-        p = y[:, :-1] + 1e-6  # numerical stability so we don't get log(0)
-        v = y[:, -1]
 
-        # loss = (v - z) * (v - z) - torch.sum(pi * torch.log(p), dim=-1)
+    for i in range(epochs):
+        rands = torch.randperm(s.size(0))
+        s = s[rands]
+        pi = pi[rands]
+        z = z[rands]
 
-        value_loss = torch.mean((v - z) * (v - z))
-        policy_loss = -torch.mean(torch.sum(pi * torch.log(p), dim=-1))
-        mean_loss = value_loss + policy_loss
+        for b in range(0, s.size(0), batch_size):
 
-        if torch.isnan(mean_loss):
-            print("getting nans")
+            end = b + batch_size if (b+batch_size < s.size(0)) else (s.size(0))
+            if end-b<2: # skip single points at end if needed
+                continue
 
-        if verbose:
-            print(f"Step {i}, Loss: {mean_loss}")
 
-        optimizer.zero_grad()
-        mean_loss.backward()
-        optimizer.step()
+            y = model(s[b : end,:])
+            p = y[:, :-1] + 1e-6  # numerical stability so we don't get log(0)
+            v = y[:, -1]
+
+            # loss = (v - z) * (v - z) - torch.sum(pi * torch.log(p), dim=-1)
+
+            value_loss = torch.mean((v - z[b:end]) * (v - z[b:end]))
+            policy_loss = -torch.mean(torch.sum(pi[b:end] * torch.log(p), dim=-1))
+            mean_loss = value_loss + policy_loss
+
+            if torch.isnan(mean_loss):
+                print("getting nans")
+
+            optimizer.zero_grad()
+            mean_loss.backward()
+            optimizer.step()
+        print(f"Epoch {i+1}, Loss: {mean_loss}")
 
     return mean_loss.detach().cpu().numpy(), value_loss.detach().cpu().numpy(), policy_loss.detach().cpu().numpy()
 
@@ -558,9 +576,9 @@ def main():
     game = tictactoe()
     input_size = game.obs_space_size
     output_size = game.action_space_size
-    hidden_layer_size = 64
-    # agent = AlphaZeroResidual(input_size, hidden_layer_size, output_size)
-    agent = AlphaZero(input_size, hidden_layer_size, output_size)
+    hidden_layer_size = 128
+    agent = AlphaZeroResidual(input_size, hidden_layer_size, output_size)
+    #agent = AlphaZero(input_size, hidden_layer_size, output_size)
     # agent = AlphaZero(input_size, hidden_layer_size, output_size)
     # agent = AlphaZeroConvLarge(input_size, hidden_layer_size, output_size)
 
@@ -569,18 +587,19 @@ def main():
     agent.eval()  # sets batch norm properly
     print(f"Parameters: {sum([p.nelement() for p in agent.parameters()])}")
 
-    iterations = 100  # how many times we want to make training data, update a model
-    num_games = 20  # play certain number of games to generate examples each iteration (batches)
-    search_steps = 20  # for each step of each game, consider this many possible outcomes
-    optimization_steps = 50  # once we have generated training data, how many epochs do we do on this data
+    iterations = 25  # how many times we want to make training data, update a model
+    num_games = 30  # play certain number of games to generate examples each iteration (batches)
+    search_steps = 30  # for each step of each game, consider this many possible outcomes
+    optimization_steps = 10  # once we have generated training data, how many epochs do we do on this data
 
     num_faceoff_games = 2  # when comparing updated model and old model, how many games they play to determine winner
 
     lr = .01
+    optimizer = torch.optim.Adam(agent.parameters(), lr=lr, weight_decay=0.01)
     lr_decay = .1
     lr_decay_period = 200
 
-    replay_buffer_size = 300
+    replay_buffer_size = 800
     best_loss = .1
     training_data = None
     new_agent = None
@@ -597,6 +616,8 @@ def main():
             #     print(f"Decayed lr to {lr}")
 
             print(f"Generating training data...")
+
+            # sliding window
             if training_data is None:
                 training_data = generate_training_data(game, num_games, search_steps, agent)
             else:  # we generate more data if our improved agent fails to beat the old one
@@ -614,16 +635,17 @@ def main():
             _z = training_data[2][-replay_buffer_size:]
 
             training_data = [_s, _pi, _z]
+
+            #training_data = generate_training_data(game, num_games, search_steps, agent)
             print(f"Generated training data: {training_data[0].size(0)} states")
 
-            if new_agent is None:  # keep the progress on the new model if we failed to beat the old one
-                new_agent = copy.deepcopy(agent)
+            # if new_agent is None:  # keep the progress on the new model if we failed to beat the old one
+            #     new_agent = copy.deepcopy(agent)
 
             print(f"Improving model...")
-            new_agent.train()
-            loss, value_loss, policy_loss = improve_model(new_agent, training_data, optimization_steps, lr=lr,
-                                                          verbose=False)
-            new_agent.eval()
+            agent.train()
+            loss, value_loss, policy_loss = improve_model(agent, training_data, optimization_steps, optimizer, verbose=False)
+            agent.eval()
 
             print(f"Finished improving model, total loss: {loss}, value loss: {value_loss}, policy loss: {policy_loss}")
 
@@ -631,18 +653,18 @@ def main():
                 torch.save(agent.state_dict(), f"saved_models/tictactoe_agent_{loss}.pt")
                 best_loss = loss
 
-            if do_compare_agents:
-                # 1. We can compare agents and keep the best one, or  2. just keep improving the same network repeatedly
-                # AlphaGo Zero 1. (the specialized version of the algortihm for Go, a predecessor to the general purpose AlhpaZero)
-                # AlphaZero uses 2.
-                print(f"Comparing agents...")
-                new_wins, old_wins, ties = compare_agents(agent, new_agent, game, num_faceoff_games)
-                print(f"New wins: {new_wins}, old wins: {old_wins}, ties: {ties}")
-                if new_wins > old_wins:
-                    agent = new_agent
-                    new_agent = None
-            else:
-                agent = new_agent
+            # if do_compare_agents:
+            #     # 1. We can compare agents and keep the best one, or  2. just keep improving the same network repeatedly
+            #     # AlphaGo Zero 1. (the specialized version of the algortihm for Go, a predecessor to the general purpose AlhpaZero)
+            #     # AlphaZero uses 2.
+            #     print(f"Comparing agents...")
+            #     new_wins, old_wins, ties = compare_agents(agent, new_agent, game, num_faceoff_games)
+            #     print(f"New wins: {new_wins}, old wins: {old_wins}, ties: {ties}")
+            #     if new_wins > old_wins:
+            #         agent = new_agent
+            #         new_agent = None
+            # else:
+            #     agent = new_agent
 
             if play_vs_heuristics:
                 agent_wins_first = 0

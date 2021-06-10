@@ -13,15 +13,16 @@ def load_and_play(filename, agent_plays=1, use_heuristic_agent=False):
     game = tictactoe()
     input_size = game.obs_space_size
     output_size = game.action_space_size
-    hidden_layer_size = 64
+    hidden_layer_size = 128
 
     if use_heuristic_agent:
         agent = None
     else:
-        agent = AlphaZero(input_size, hidden_layer_size, output_size)
+        agent = AlphaZeroResidual(input_size, hidden_layer_size, output_size)
         # agent = AlphaZeroResidual(input_size, hidden_layer_size, output_size)
         # agent = AlphaZeroConv(input_size, hidden_layer_size, output_size)
         agent.load_state_dict(torch.load(filename, map_location=device))
+    agent.eval()
     play_with_agent(agent, verbose=True, agent_plays=agent_plays, use_heuristic_agent=use_heuristic_agent)
 
 
@@ -91,7 +92,7 @@ def play_with_agent(agent, verbose=False, agent_plays=1, use_heuristic_agent=Fal
 
     if reward == 0:
         print("Tie game")
-    elif reward == 1 and agent_plays == 1:
+    elif (reward == 1 and agent_plays == 1) or (reward == -1 and agent_plays == 2):
         print("Agent won")
     else:
         print("You won!")
@@ -112,5 +113,5 @@ def agent_play_against_heuristics(filename):
 
 
 if __name__ == "__main__":
-    load_and_play("saved_models/tictactoe_agent.pt", agent_plays=1)      # load_and_play("tictactoe_agent.pt")
+    load_and_play("saved_models/tictactoe_agent.pt", agent_plays=2)      # load_and_play("tictactoe_agent.pt")
     # agent_play_against_heuristics("best_models/tictactoe_agent_0.01879117079079151.pt")
